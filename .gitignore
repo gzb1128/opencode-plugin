@@ -1,0 +1,15 @@
+# Binaries
+/bin/
+
+# Hidden directories at root (.*)
+/.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
