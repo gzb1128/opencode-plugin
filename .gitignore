@@ -1,8 +1,8 @@
 # Binaries
 /bin/
 
-# Hidden directories at root (.*)
-/.*
+# Hidden directories at root (e.g., .claude, .cursor, etc.)
+/.*/
 
 # IDE
 .idea/
