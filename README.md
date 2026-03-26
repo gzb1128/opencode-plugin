@@ -14,6 +14,12 @@ A standalone CLI tool for managing OpenCode's plugin ecosystem, replicating Clau
 - ✅ Plugin update and version management
 - ✅ Plugin info command
 - ✅ Plugin search across all marketplaces
+- ✅ **Full MCP (Model Context Protocol) support**
+  - MCP server auto-installation and configuration
+  - Support for stdio, HTTP, SSE, WebSocket MCP servers
+  - Automatic variable substitution (${CLAUDE_PLUGIN_ROOT}, ${PLUGIN_NAME}, ${PLUGIN_VERSION})
+  - Plugin prefix to avoid MCP server name conflicts
+  - Auto-cleanup on plugin removal
 
 ## How It Works
 
@@ -146,6 +152,23 @@ opencode-plugin plugin update my-plugin             # Update specific
 opencode-plugin plugin remove my-plugin
 ```
 
+### Manage MCP Servers
+
+MCP servers are automatically installed and configured when you install a plugin that includes them.
+
+```bash
+# List all installed MCP servers
+opencode-plugin mcp list
+
+# Show MCP server details
+opencode-plugin mcp show plugin-name.server-name
+
+# MCP servers are automatically removed when plugin is removed
+opencode-plugin plugin remove my-plugin
+```
+
+See [docs/MCP.md](docs/MCP.md) for detailed MCP documentation.
+
 ## Project Structure
 
 See [docs/develop.md](docs/develop.md) for detailed project structure.
@@ -165,11 +188,18 @@ See [docs/develop.md](docs/develop.md) for detailed project structure.
     └── official/
         └── plugin-name/
             └── 1.0.0/
+                ├── .claude-plugin/
+                │   └── plugin.json
+                ├── .mcp.json           # MCP server configuration (if any)
                 ├── skills/
                 ├── commands/
-                └── agents/
+                ├── agents/
+                ├── server.ts           # MCP server source code (if any)
+                ├── package.json        # MCP server dependencies (if any)
+                └── ...                 # Other MCP server files
 
 ~/.config/opencode/            # OpenCode configuration
+├── .mcp.json                  # MCP server registry
 ├── skills/
 │   └── skill-name -> ~/.opencode-plugin-cli/cache/.../skills/skill-name.md
 ├── commands/
