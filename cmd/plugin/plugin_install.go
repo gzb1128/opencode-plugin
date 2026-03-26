@@ -64,12 +64,11 @@ var removeCmd = &cobra.Command{
 
 		// Parse plugin spec
 		var pluginName, marketName string
-		if idx := strings.Index(pluginSpec, "@"); idx > 0 {
+		if idx := strings.Index(pluginSpec, "@"); idx >= 0 {
 			pluginName = pluginSpec[:idx]
 			marketName = pluginSpec[idx+1:]
 		} else {
 			pluginName = pluginSpec
-			// Need to find which market it's from
 		}
 
 		configMgr, err := config.NewManager()
@@ -80,25 +79,38 @@ var removeCmd = &cobra.Command{
 
 		installer := plugin.NewInstaller(configMgr)
 
-		// If market name not specified, try to find the plugin
-		if marketName == "" {
+		// If market name not specified (no @ in spec), try to find the plugin
+		if !strings.Contains(pluginSpec, "@") {
 			installed, err := installer.List()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: Failed to list installed plugins: %v\n", err)
 				os.Exit(1)
 			}
 
+			// Find all matching plugins
+			var matches []string
 			for key := range installed {
 				if strings.HasPrefix(key, pluginName+"@") {
-					marketName = strings.TrimPrefix(key, pluginName+"@")
-					break
+					matches = append(matches, key)
 				}
 			}
-		}
 
-		if marketName == "" {
-			fmt.Fprintf(os.Stderr, "Error: Plugin %s not found\n", pluginName)
-			os.Exit(1)
+			// If multiple matches, show them to user
+			if len(matches) > 1 {
+				fmt.Fprintf(os.Stderr, "Error: Multiple installations of %s found:\n", pluginName)
+				for _, match := range matches {
+					fmt.Fprintf(os.Stderr, "  - %s\n", match)
+				}
+				fmt.Fprintf(os.Stderr, "\nPlease specify which one to remove:\n")
+				fmt.Fprintf(os.Stderr, "  opencode-plugin plugin remove %s\n", matches[0])
+				os.Exit(1)
+			}
+
+			// If exactly one match, use it
+			if len(matches) == 1 {
+				key := matches[0]
+				marketName = strings.TrimPrefix(key, pluginName+"@")
+			}
 		}
 
 		if err := installer.Remove(pluginName, marketName); err != nil {

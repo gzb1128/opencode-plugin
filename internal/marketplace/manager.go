@@ -86,26 +86,26 @@ func (m *Manager) Update(marketDir string) error {
 	return nil
 }
 
-func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, marketName string) (*Plugin, *MarketSource, error) {
+func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, marketName string) (*Plugin, *MarketSource, string, error) {
 	if marketName != "" {
 		market, ok := markets[marketName]
 		if !ok {
-			return nil, nil, fmt.Errorf("marketplace %s not found", marketName)
+			return nil, nil, "", fmt.Errorf("marketplace %s not found", marketName)
 		}
 
 		indexPath := filepath.Join(market.InstallLocation, ".claude-plugin", "marketplace.json")
 		marketplace, err := ParseMarketplaceIndex(indexPath)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 
 		for _, plugin := range marketplace.Plugins {
 			if plugin.Name == pluginName {
-				return &plugin, &market, nil
+				return &plugin, &market, marketName, nil
 			}
 		}
 
-		return nil, nil, fmt.Errorf("plugin %s not found in marketplace %s", pluginName, marketName)
+		return nil, nil, "", fmt.Errorf("plugin %s not found in marketplace %s", pluginName, marketName)
 	}
 
 	for mName, market := range markets {
@@ -117,13 +117,12 @@ func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, market
 
 		for _, plugin := range marketplace.Plugins {
 			if plugin.Name == pluginName {
-				_ = mName // avoid unused variable error
-				return &plugin, &market, nil
+				return &plugin, &market, mName, nil
 			}
 		}
 	}
 
-	return nil, nil, fmt.Errorf("plugin %s not found in any marketplace", pluginName)
+	return nil, nil, "", fmt.Errorf("plugin %s not found in any marketplace", pluginName)
 }
 
 func (m *Manager) Remove(name string) error {

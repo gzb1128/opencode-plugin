@@ -70,18 +70,15 @@ Examples:
 		// Find plugin
 		paths := configMgr.GetPaths()
 		mgr := marketplace.NewManager(paths.MarketsDir)
-		p, market, err := mgr.FindPlugin(marketSources, pluginName, marketName)
+		p, market, foundMarketName, err := mgr.FindPlugin(marketSources, pluginName, marketName)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Get market name
-		for name, ms := range marketSources {
-			if ms.InstallLocation == market.InstallLocation {
-				marketName = name
-				break
-			}
+		// Use found market name if not specified
+		if marketName == "" {
+			marketName = foundMarketName
 		}
 
 		// Get plugin path
