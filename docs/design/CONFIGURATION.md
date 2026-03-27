@@ -113,29 +113,29 @@ func TestE2ECodeSimplifier(t *testing.T) {
 
 ## Default Marketplace
 
-When no configuration exists, the CLI automatically initializes with:
+Marketplaces are NOT auto-initialized. Users must add them explicitly:
+
+```bash
+opencode-plugin market add anthropics/claude-plugins-official
+```
+
+This persists to `known_marketplaces.json`:
 
 ```json
 {
-  "claude-plugins-official": {
-    "source": {
-      "source": "github",
-      "repo": "anthropics/claude-plugins-official"
-    },
-    "installLocation": "~/.opencode-plugin-cli/markets/claude-plugins-official",
-    "lastUpdated": "2026-03-24T14:24:33+08:00"
+  "anthropics/claude-plugins-official": {
+    "installLocation": "~/.opencode-plugin-cli/markets/anthropics/claude-plugins-official",
+    "lastUpdated": "2026-03-24T14:24:33+08:00",
+    "path": "",
+    "repo": "anthropics/claude-plugins-official",
+    "source": "github",
+    "url": "https://github.com/anthropics/claude-plugins-official.git"
   }
 }
 ```
 
-This happens in `config/manager.go`:
-
-```go
-func NewManager() (*Manager, error) {
-    env := DefaultEnvironment()
-    return NewManagerWithEnv(env)
-}
-```
+The marketplace name is derived from the source URL (last path segment
+stripped of `.git` suffix).
 
 ## Configuration Files
 
@@ -156,16 +156,17 @@ Stores all added marketplaces:
 
 ### installed_plugins.json
 
-Tracks installed plugins:
+Tracks installed plugins. The key format is `pluginName@marketplaceName`
+to support plugins with the same name from different marketplaces:
 
 ```json
 {
   "version": 2,
   "plugins": {
-    "plugin-name@marketplace": [
+    "code-simplifier@anthropics/claude-plugins-official": [
       {
         "scope": "user",
-        "installPath": "/path/to/cache",
+        "installPath": "/path/to/cache/.../code-simplifier/1.0.0",
         "version": "1.0.0",
         "installedAt": "2026-03-24T14:24:33Z",
         "lastUpdated": "2026-03-24T14:24:33Z"
