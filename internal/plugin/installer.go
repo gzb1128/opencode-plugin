@@ -56,7 +56,65 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 		return fmt.Errorf("marketplace install location not found")
 	}
 
-	pluginPath, err := i.resolver.GetPluginSourcePath(plugin, marketPath)
+	isRemote := i.resolver.IsRemoteSource(plugin)
+	var pluginPath string
+
+	if isRemote {
+		version, err := i.resolveRemoteVersion(plugin, opts.Version)
+		if err != nil {
+			return fmt.Errorf("failed to resolve version: %w", err)
+		}
+
+		cachePath := filepath.Join(
+			i.configMgr.GetPaths().CacheDir,
+			opts.MarketName,
+			pluginName,
+			version,
+		)
+
+		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+			fmt.Printf("  Cloning plugin from remote repository...\n")
+			if err := i.resolver.CloneRemotePlugin(plugin, cachePath); err != nil {
+				return fmt.Errorf("failed to clone plugin: %w", err)
+			}
+		}
+
+		pluginPath = cachePath
+
+		counts, err := i.linker.CreateSymlinks(pluginPath)
+		if err != nil {
+			fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", err)
+		}
+
+		mcpCount, err := i.installMCP(pluginPath, pluginName)
+		if err != nil {
+			fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
+		}
+
+		key := fmt.Sprintf("%s@%s", pluginName, opts.MarketName)
+		record := &config.InstallRecord{
+			Scope:       opts.Scope,
+			InstallPath: cachePath,
+			Version:     version,
+			InstalledAt: time.Now(),
+		}
+
+		if err := i.configMgr.AddInstallRecord(key, record); err != nil {
+			return fmt.Errorf("failed to record installation: %w", err)
+		}
+
+		fmt.Printf("✓ Successfully installed plugin: %s@%s\n", pluginName, version)
+		fmt.Printf("  From marketplace: %s\n", opts.MarketName)
+		fmt.Printf("  Cache: %s\n", cachePath)
+		fmt.Printf("  Skills: %d, Commands: %d, Agents: %d\n", counts.Skills, counts.Commands, counts.Agents)
+		if mcpCount > 0 {
+			fmt.Printf("  MCP Servers: %d\n", mcpCount)
+		}
+
+		return nil
+	}
+
+	pluginPath, err = i.resolver.GetPluginSourcePath(plugin, marketPath)
 	if err != nil {
 		return fmt.Errorf("failed to get plugin source path: %w", err)
 	}
@@ -88,7 +146,6 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 		return fmt.Errorf("failed to create symlinks: %w", err)
 	}
 
-	// Install MCP servers
 	mcpCount, err := i.installMCP(cachePath, pluginName)
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
@@ -115,6 +172,31 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 	}
 
 	return nil
+}
+
+func (i *Installer) resolveRemoteVersion(plugin *marketplace.Plugin, requested string) (string, error) {
+	switch src := plugin.Source.(type) {
+	case marketplace.PluginSource:
+		if src.SHA != "" {
+			if len(src.SHA) > 12 {
+				return src.SHA[:12], nil
+			}
+			return src.SHA, nil
+		}
+	case map[string]interface{}:
+		if sha, ok := src["sha"].(string); ok && sha != "" {
+			if len(sha) > 12 {
+				return sha[:12], nil
+			}
+			return sha, nil
+		}
+	}
+
+	if requested != "" && requested != "latest" {
+		return requested, nil
+	}
+
+	return "latest", nil
 }
 
 func (i *Installer) installMCP(pluginPath, pluginName string) (int, error) {

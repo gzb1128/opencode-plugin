@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 func ParseMarketplaceIndex(path string) (*Marketplace, error) {
@@ -62,6 +63,13 @@ func parsePluginSource(plugin *Plugin) error {
 		case "git-subdir":
 			if url, ok := v["url"].(string); ok {
 				ps.URL = url
+			}
+			if repo, ok := v["repo"].(string); ok && ps.URL == "" {
+				ps.URL = "https://github.com/" + repo + ".git"
+			}
+			// Convert GitHub shorthand to full URL
+			if ps.URL != "" && !strings.HasPrefix(ps.URL, "http://") && !strings.HasPrefix(ps.URL, "https://") && !strings.HasPrefix(ps.URL, "git@") {
+				ps.URL = "https://github.com/" + ps.URL + ".git"
 			}
 			if path, ok := v["path"].(string); ok {
 				ps.SubPath = path
