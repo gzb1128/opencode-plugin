@@ -28,6 +28,7 @@ type Paths struct {
 	KnownMarkets   string
 	InstalledFile  string
 	OpenCodeConfig string
+	AgentsDir      string
 }
 
 // KnownMarkets stores marketplace information
@@ -46,5 +47,6 @@ func DefaultPaths() *Paths {
 		KnownMarkets:   filepath.Join(baseDir, "known_marketplaces.json"),
 		InstalledFile:  filepath.Join(baseDir, "installed_plugins.json"),
 		OpenCodeConfig: filepath.Join(homeDir, ".config", "opencode"),
+		AgentsDir:      filepath.Join(homeDir, ".agents"),
 	}
 }

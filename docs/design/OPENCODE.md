@@ -2,9 +2,8 @@
 
 ## Overview
 
-The OpenCode integration module creates and manages symbolic links in OpenCode's
-configuration directory (`~/.config/opencode/`) so that OpenCode automatically
-discovers installed plugin components.
+The OpenCode integration module creates and manages symbolic links in the agents
+directory (`~/.agents/`) so that installed plugin skills are discovered.
 
 ## File Structure
 
@@ -17,32 +16,22 @@ internal/opencode/
 
 ```go
 type Linker struct {
-    opencodeConfig string  // ~/.config/opencode
+    agentsDir string  // ~/.agents
 }
 
 type ComponentCounts struct {
-    Skills   int
-    Commands int
-    Agents   int
+    Skills int
 }
 ```
 
 ## How It Works
 
-OpenCode automatically discovers files in these directories:
-- `~/.config/opencode/skills/` — skill definitions
-- `~/.config/opencode/commands/` — slash command definitions
-- `~/.config/opencode/agents/` — agent definitions
-
-The linker creates symbolic links from these directories to the plugin cache:
+Skills are synced to the agents directory:
 
 ```
-~/.config/opencode/skills/
+~/.agents/skills/
 ├── code-simplifier → ~/.opencode-plugin-cli/cache/.../code-simplifier/skills/code-simplifier
 └── frontend-design → ~/.opencode-plugin-cli/cache/.../frontend-design/skills/frontend-design
-
-~/.config/opencode/agents/
-└── code-simplifier → ~/.opencode-plugin-cli/cache/.../code-simplifier/agents/code-simplifier
 ```
 
 ## CreateSymlinks
@@ -50,11 +39,11 @@ The linker creates symbolic links from these directories to the plugin cache:
 ```
 CreateSymlinks(pluginPath string) (*ComponentCounts, error)
 │
-├── For each component directory (skills, commands, agents):
+├── For the skills component directory:
 │   ├── Check if source exists in pluginPath
 │   ├── Read entries from source directory
 │   └── For each entry:
-│       ├── Compute target path: opencodeConfig/<component>/<entry_name>
+│       ├── Compute target path: agentsDir/skills/<entry_name>
 │       ├── Skip if target already exists as symlink to same location
 │       ├── Warn and skip if target exists as symlink to different location (conflict)
 │       ├── Warn and skip if target exists as regular file
@@ -77,8 +66,8 @@ CreateSymlinks(pluginPath string) (*ComponentCounts, error)
 ```
 RemoveSymlinks(pluginPath string) (int, error)
 │
-├── For each component directory (skills, commands, agents):
-│   ├── Read entries from opencodeConfig/<component>/
+├── For the skills component directory:
+│   ├── Read entries from agentsDir/skills/
 │   └── For each entry:
 │       ├── Resolve symlink target
 │       ├── If target is inside pluginPath → remove symlink
@@ -87,20 +76,10 @@ RemoveSymlinks(pluginPath string) (int, error)
 └── Return count of removed symlinks
 ```
 
-## DetectOpenCodeConfig
-
-Verifies that `~/.config/opencode/` exists. Creates it if missing.
-
-```go
-func (l *Linker) DetectOpenCodeConfig() (string, error)
-```
-
 ## Directory Scanning
 
-The linker scans plugin directories for these subdirectories:
+The linker scans plugin directories for the `skills/` subdirectory:
 - `skills/` — scanned recursively, top-level entries become symlinks
-- `commands/` — same as skills
-- `agents/` — same as skills
 
 Each entry (file or directory) in these directories is symlinked individually.
 For example, a plugin with:
@@ -114,5 +93,5 @@ skills/
 ```
 
 Creates two symlinks:
-- `~/.config/opencode/skills/my-skill → .../skills/my-skill/`
-- `~/.config/opencode/skills/another-skill.md → .../skills/another-skill.md`
+- `~/.agents/skills/my-skill → .../skills/my-skill/`
+- `~/.agents/skills/another-skill.md → .../skills/another-skill.md`

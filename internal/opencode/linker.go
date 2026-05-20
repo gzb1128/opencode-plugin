@@ -7,91 +7,62 @@ import (
 )
 
 type Linker struct {
-	opencodeConfig string
+	agentsDir string
 }
 
-func NewLinker(opencodeConfig string) *Linker {
+func NewLinker(agentsDir string) *Linker {
 	return &Linker{
-		opencodeConfig: opencodeConfig,
+		agentsDir: agentsDir,
 	}
 }
 
 type ComponentCounts struct {
-	Skills   int
-	Commands int
-	Agents   int
+	Skills int
 }
 
 func (l *Linker) CreateSymlinks(pluginPath string) (*ComponentCounts, error) {
 	counts := &ComponentCounts{}
 
-	// Ensure OpenCode config directories exist
-	dirs := []string{
-		filepath.Join(l.opencodeConfig, "skills"),
-		filepath.Join(l.opencodeConfig, "commands"),
-		filepath.Join(l.opencodeConfig, "agents"),
+	skillsDir := filepath.Join(l.agentsDir, "skills")
+
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory %s: %w", skillsDir, err)
 	}
 
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create directory %s: %w", dir, err)
-		}
+	srcDir := filepath.Join(pluginPath, "skills")
+	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		return counts, nil
 	}
 
-	// Define component types
-	components := []struct {
-		dir    string
-		target string
-		count  *int
-	}{
-		{"skills", "skills", &counts.Skills},
-		{"commands", "commands", &counts.Commands},
-		{"agents", "agents", &counts.Agents},
+	files, err := os.ReadDir(srcDir)
+	if err != nil {
+		return counts, nil
 	}
 
 	var conflicts []string
 
-	// Create symlinks for each component type
-	for _, comp := range components {
-		srcDir := filepath.Join(pluginPath, comp.dir)
-		if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-			continue
-		}
+	for _, file := range files {
+		srcPath := filepath.Join(srcDir, file.Name())
+		targetPath := filepath.Join(skillsDir, file.Name())
 
-		files, err := os.ReadDir(srcDir)
-		if err != nil {
-			continue
-		}
-
-		for _, file := range files {
-			srcPath := filepath.Join(srcDir, file.Name())
-			targetPath := filepath.Join(l.opencodeConfig, comp.target, file.Name())
-
-			// Check if already exists
-			if _, err := os.Lstat(targetPath); err == nil {
-				// If it's a symlink, check if it points to our plugin
-				if isSymlink(targetPath) {
-					existingTarget, _ := os.Readlink(targetPath)
-					if filepath.Dir(existingTarget) == srcDir {
-						// Already points to our plugin, skip
-						(*comp.count)++
-						continue
-					}
+		if _, err := os.Lstat(targetPath); err == nil {
+			if isSymlink(targetPath) {
+				existingTarget, _ := os.Readlink(targetPath)
+				if filepath.Dir(existingTarget) == srcDir {
+					counts.Skills++
+					continue
 				}
-				// Record conflict
-				conflicts = append(conflicts, targetPath)
-				continue
 			}
-
-			// Create symlink
-			if err := os.Symlink(srcPath, targetPath); err != nil {
-				return nil, fmt.Errorf("failed to create symlink %s: %w", targetPath, err)
-			}
-			(*comp.count)++
+			conflicts = append(conflicts, targetPath)
+			continue
 		}
+
+		if err := os.Symlink(srcPath, targetPath); err != nil {
+			return nil, fmt.Errorf("failed to create symlink %s: %w", targetPath, err)
+		}
+		counts.Skills++
 	}
 
-	// Report conflicts
 	if len(conflicts) > 0 {
 		fmt.Println("⚠️  Some files already exist and were skipped:")
 		for _, conflict := range conflicts {
@@ -105,44 +76,36 @@ func (l *Linker) CreateSymlinks(pluginPath string) (*ComponentCounts, error) {
 func (l *Linker) RemoveSymlinks(pluginPath string) (int, error) {
 	count := 0
 
-	// Define component types
-	components := []string{"skills", "commands", "agents"}
+	skillsDir := filepath.Join(l.agentsDir, "skills")
+	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
+		return 0, nil
+	}
 
-	for _, comp := range components {
-		targetDir := filepath.Join(l.opencodeConfig, comp)
-		if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+	files, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return 0, nil
+	}
+
+	for _, file := range files {
+		targetPath := filepath.Join(skillsDir, file.Name())
+
+		if !isSymlink(targetPath) {
 			continue
 		}
 
-		files, err := os.ReadDir(targetDir)
+		linkTarget, err := os.Readlink(targetPath)
 		if err != nil {
 			continue
 		}
 
-		for _, file := range files {
-			targetPath := filepath.Join(targetDir, file.Name())
+		absPluginPath, _ := filepath.Abs(pluginPath)
+		absLinkTarget, _ := filepath.Abs(linkTarget)
 
-			// Check if it's a symlink
-			if !isSymlink(targetPath) {
-				continue
-			}
-
-			// Check if it points to our plugin
-			linkTarget, err := os.Readlink(targetPath)
-			if err != nil {
-				continue
-			}
-
-			// Check if the link target is inside our plugin path
-			absPluginPath, _ := filepath.Abs(pluginPath)
-			absLinkTarget, _ := filepath.Abs(linkTarget)
-
-			if filepath.Dir(absLinkTarget) == filepath.Join(absPluginPath, comp) {
-				if err := os.Remove(targetPath); err != nil {
-					fmt.Printf("⚠️  Failed to remove symlink: %s (%v)\n", targetPath, err)
-				} else {
-					count++
-				}
+		if filepath.Dir(absLinkTarget) == filepath.Join(absPluginPath, "skills") {
+			if err := os.Remove(targetPath); err != nil {
+				fmt.Printf("⚠️  Failed to remove symlink: %s (%v)\n", targetPath, err)
+			} else {
+				count++
 			}
 		}
 	}
@@ -156,17 +119,4 @@ func isSymlink(path string) bool {
 		return false
 	}
 	return info.Mode()&os.ModeSymlink != 0
-}
-
-func (l *Linker) DetectOpenCodeConfig() (string, error) {
-	if _, err := os.Stat(l.opencodeConfig); err == nil {
-		return l.opencodeConfig, nil
-	}
-
-	// Try to create it
-	if err := os.MkdirAll(l.opencodeConfig, 0755); err != nil {
-		return "", fmt.Errorf("failed to create OpenCode config directory: %w", err)
-	}
-
-	return l.opencodeConfig, nil
 }

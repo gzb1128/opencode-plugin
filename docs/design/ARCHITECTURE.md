@@ -59,10 +59,8 @@ User runs: opencode-plugin plugin install <name>
    ├── 2d. Copy plugin files to cache (skip .git)
    │       └── ~/.opencode-plugin-cli/cache/<market>/<name>/<version>/
    │
-   ├── 2e. opencode.Linker::CreateSymlinks()
-   │       ├── ~/.config/opencode/skills/* → cache/*/skills/*
-   │       ├── ~/.config/opencode/commands/* → cache/*/commands/*
-   │       └── ~/.config/opencode/agents/* → cache/*/agents/*
+    ├── 2e. opencode.Linker::CreateSymlinks()
+    │       └── ~/.agents/skills/* → cache/*/skills/*
    │
    ├── 2f. mcp.Manager::InstallMCPConfig()
    │       ├── Read .mcp.json + plugin.json mcpServers
@@ -107,20 +105,13 @@ User runs: opencode-plugin plugin remove <name>
                 ├── .claude-plugin/
                 ├── .mcp.json
                 ├── skills/
-                ├── commands/
-                ├── agents/
                 ├── server.ts       (MCP server source)
                 ├── package.json    (MCP dependencies)
                 └── ...
 
-~/.config/opencode/
-├── .mcp.json              (global MCP server registry)
-├── skills/
-│   └── <name> → ~/.opencode-plugin-cli/cache/.../skills/<name>
-├── commands/
-│   └── <name> → ~/.opencode-plugin-cli/cache/.../commands/<name>
-└── agents/
-    └── <name> → ~/.opencode-plugin-cli/cache/.../agents/<name>
+~/.agents/
+└── skills/
+    └── <name> → ~/.opencode-plugin-cli/cache/.../skills/<name>
 ```
 
 ## Layer Responsibilities
@@ -136,11 +127,11 @@ User runs: opencode-plugin plugin remove <name>
 
 ## Key Design Decisions
 
-1. **Symlinks over copies**: Plugins are symlinked into OpenCode's config dir so OpenCode discovers them without any code changes.
+1. **Symlinks over copies**: Plugin skills are symlinked into the agents dir so they are discovered without any code changes.
 
 2. **Plugin name prefix for MCP**: MCP servers are registered as `pluginName.serverName` to avoid conflicts between plugins.
 
-3. **Copy-all caching**: All plugin files (including MCP source code and dependencies) are copied to cache, not just skills/commands/agents.
+3. **Copy-all caching**: All plugin files (including MCP source code and dependencies) are copied to cache, not just skills.
 
 4. **Environment abstraction**: Config module supports production and test environments via `Environment` struct, ensuring tests don't affect real config.
 

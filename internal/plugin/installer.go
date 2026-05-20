@@ -25,7 +25,7 @@ func NewInstaller(configMgr *config.Manager) *Installer {
 	return &Installer{
 		configMgr:  configMgr,
 		resolver:   NewVersionResolver(),
-		linker:     opencode.NewLinker(paths.OpenCodeConfig),
+		linker:     opencode.NewLinker(paths.AgentsDir),
 		marketMgr:  marketplace.NewManager(paths.MarketsDir),
 		mcpManager: mcp.NewManager(paths.OpenCodeConfig),
 	}
@@ -106,7 +106,7 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 		fmt.Printf("✓ Successfully installed plugin: %s@%s\n", pluginName, version)
 		fmt.Printf("  From marketplace: %s\n", opts.MarketName)
 		fmt.Printf("  Cache: %s\n", cachePath)
-		fmt.Printf("  Skills: %d, Commands: %d, Agents: %d\n", counts.Skills, counts.Commands, counts.Agents)
+		fmt.Printf("  Skills: %d\n", counts.Skills)
 		if mcpCount > 0 {
 			fmt.Printf("  MCP Servers: %d\n", mcpCount)
 		}
@@ -166,7 +166,7 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 	fmt.Printf("✓ Successfully installed plugin: %s@%s\n", pluginName, version)
 	fmt.Printf("  From marketplace: %s\n", opts.MarketName)
 	fmt.Printf("  Cache: %s\n", cachePath)
-	fmt.Printf("  Skills: %d, Commands: %d, Agents: %d\n", counts.Skills, counts.Commands, counts.Agents)
+	fmt.Printf("  Skills: %d\n", counts.Skills)
 	if mcpCount > 0 {
 		fmt.Printf("  MCP Servers: %d\n", mcpCount)
 	}

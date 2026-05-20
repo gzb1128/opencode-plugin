@@ -50,12 +50,12 @@ Install(pluginName, opts) error
 ├── 5. Copy plugin files to cache
 │       copyPluginToCache(src, dst)
 │       → copies ALL files (skip .git)
-│       → includes: .claude-plugin/, .mcp.json, skills/, commands/,
-│         agents/, server.ts, package.json, etc.
+│       → includes: .claude-plugin/, .mcp.json, skills/,
+│         server.ts, package.json, etc.
 │
 ├── 6. CreateSymlinks(cachePath)
-│       → skills/*, commands/*, agents/* → ~/.config/opencode/
-│       → returns ComponentCounts{Skills, Commands, Agents}
+│       → skills/* → ~/.agents/skills/
+│       → returns ComponentCounts{Skills}
 │
 ├── 7. installMCP(cachePath, pluginName)
 │       → GetMCPServers() → count
@@ -72,7 +72,7 @@ Install(pluginName, opts) error
 Remove(pluginName, marketName) error
 │
 ├── 1. GetInstallRecord(key) → get cache path
-├── 2. RemoveSymlinks(installPath) → unlink from ~/.config/opencode/
+├── 2. RemoveSymlinks(installPath) → unlink from ~/.agents/
 ├── 3. UninstallMCPConfig(pluginName) → remove from .mcp.json
 ├── 4. os.RemoveAll(cachePath)
 └── 5. RemoveInstallRecord(key)

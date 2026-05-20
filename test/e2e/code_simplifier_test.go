@@ -111,19 +111,16 @@ func TestE2ECodeSimplifier(t *testing.T) {
 	})
 
 	t.Run("VerifySymlinks", func(t *testing.T) {
-		// Check if OpenCode config directory exists
 		paths := configMgr.GetPaths()
-		configDir := paths.OpenCodeConfig
-		if _, err := os.Stat(configDir); os.IsNotExist(err) {
-			t.Fatalf("OpenCode config directory does not exist: %s", configDir)
+		agentsDir := paths.AgentsDir
+		if _, err := os.Stat(agentsDir); os.IsNotExist(err) {
+			t.Fatalf("Agents directory does not exist: %s", agentsDir)
 		}
 
-		// Check for skills directory
-		skillsDir := filepath.Join(configDir, "skills")
+		skillsDir := filepath.Join(agentsDir, "skills")
 		if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 			t.Logf("Skills directory does not exist (expected for code-simplifier)")
 		} else {
-			// List symlinks
 			files, err := os.ReadDir(skillsDir)
 			if err != nil {
 				t.Fatalf("Failed to read skills directory: %v", err)

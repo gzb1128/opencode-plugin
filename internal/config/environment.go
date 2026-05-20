@@ -9,6 +9,7 @@ import (
 type Environment struct {
 	BaseDir        string
 	OpenCodeConfig string
+	AgentsDir      string
 }
 
 // DefaultEnvironment returns the default environment using user's home directory
@@ -19,6 +20,7 @@ func DefaultEnvironment() *Environment {
 	return &Environment{
 		BaseDir:        baseDir,
 		OpenCodeConfig: filepath.Join(homeDir, ".config", "opencode"),
+		AgentsDir:      filepath.Join(homeDir, ".agents"),
 	}
 }
 
@@ -27,6 +29,7 @@ func TestEnvironment(tempDir string) *Environment {
 	return &Environment{
 		BaseDir:        filepath.Join(tempDir, ".opencode-plugin-cli"),
 		OpenCodeConfig: filepath.Join(tempDir, ".config", "opencode"),
+		AgentsDir:      filepath.Join(tempDir, ".agents"),
 	}
 }
 
@@ -39,5 +42,6 @@ func (e *Environment) Paths() *Paths {
 		KnownMarkets:   filepath.Join(e.BaseDir, "known_marketplaces.json"),
 		InstalledFile:  filepath.Join(e.BaseDir, "installed_plugins.json"),
 		OpenCodeConfig: e.OpenCodeConfig,
+		AgentsDir:      e.AgentsDir,
 	}
 }

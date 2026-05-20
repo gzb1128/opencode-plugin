@@ -7,7 +7,7 @@
 当你安装一个插件后,CLI 会自动:
 
 1. **下载插件** 到缓存目录 (`~/.opencode-plugin-cli/cache/`)
-2. **创建符号链接** 到 OpenCode 配置目录 (`~/.config/opencode/`)
+2. **创建符号链接** 到 agents 目录 (`~/.agents/skills/`)
 3. **记录安装信息** 到 `installed_plugins.json`
 
 ### 2. 符号链接结构
@@ -15,29 +15,16 @@
 安装插件后,符号链接会创建在以下位置:
 
 ```
-~/.config/opencode/
-├── skills/
-│   ├── skill-name.md -> ~/.opencode-plugin-cli/cache/market/plugin/version/skills/skill-name.md
-│   └── ...
-├── commands/
-│   ├── command-name.md -> ~/.opencode-plugin-cli/cache/market/plugin/version/commands/command-name.md
-│   └── ...
-└── agents/
-    ├── agent-name.md -> ~/.opencode-plugin-cli/cache/market/plugin/version/agents/agent-name.md
-    └── ...
+~/.agents/skills/
+├── skill-name.md -> ~/.opencode-plugin-cli/cache/market/plugin/version/skills/skill-name.md
+└── ...
 ```
 
-### 3. OpenCode 如何发现插件
+### 3. 技能如何被发现
 
-OpenCode 会自动扫描以下目录:
-- `~/.config/opencode/skills/` - 技能
-- `~/.config/opencode/commands/` - 命令
-- `~/.config/opencode/agents/` - 代理
+符号链接位于 `~/.agents/skills/` 目录下。
 
-由于我们创建了符号链接,OpenCode 会:
-1. **自动发现** 符号链接指向的文件
-2. **加载插件** 的 skills, commands, agents
-3. **立即可用** 无需重启
+由于我们创建了符号链接,插件技能会被自动发现和加载。
 
 ### 4. 实际使用示例
 
@@ -49,16 +36,14 @@ opencode-plugin plugin install code-simplifier
 # ✓ Successfully installed plugin: code-simplifier@1.0.0
 #   From marketplace: anthropics/claude-plugins-official
 #   Cache: ~/.opencode-plugin-cli/cache/anthropics/claude-plugins-official/code-simplifier/1.0.0
-#   Skills: 0, Commands: 0, Agents: 1
+#   Skills: 1
 
 # 验证符号链接
-ls -la ~/.config/opencode/agents/
+ls -la ~/.agents/skills/
 # 输出:
 # code-simplifier.md -> ~/.opencode-plugin-cli/cache/.../code-simplifier.md
 
-# OpenCode 现在可以使用 code-simplifier agent
-# 在 OpenCode 中输入:
-# "使用 code-simplifier agent 简化这段代码..."
+# 插件技能现在可以使用
 ```
 
 ### 5. 插件更新和删除
@@ -92,9 +77,9 @@ opencode-plugin plugin list
 ### Q: 插件安装后 OpenCode 没有发现?
 
 **A:** 检查以下几点:
-1. 符号链接是否存在: `ls -la ~/.config/opencode/agents/`
-2. 符号链接目标是否有效: `readlink ~/.config/opencode/agents/agent-name.md`
-3. OpenCode 配置目录是否正确
+1. 符号链接是否存在: `ls -la ~/.agents/skills/`
+2. 符号链接目标是否有效: `readlink ~/.agents/skills/skill-name.md`
+3. agents 目录是否正确
 
 ### Q: 如何知道插件包含哪些组件?
 
@@ -108,7 +93,7 @@ opencode-plugin plugin info code-simplifier
 **A:** 如果已存在同名文件,CLI 会跳过并显示警告:
 ```
 ⚠️  Some files already exist and were skipped:
-  - ~/.config/opencode/agents/existing-agent.md
+  - ~/.agents/skills/existing-skill.md
 ```
 你可以手动删除旧文件后重新安装。
 
@@ -137,30 +122,21 @@ opencode-plugin plugin info code-simplifier
 │               └── code-simplifier/
 │                   ├── .claude-plugin/
 │                   │   └── plugin.json
-│                   ├── agents/
-│                   │   └── code-simplifier.md
-│                   ├── skills/
-│                   └── commands/
+│                   └── skills/
 └── cache/                        # 已安装插件的缓存
     └── anthropics/
         └── claude-plugins-official/
             └── code-simplifier/
                 └── 1.0.0/
-                    ├── agents/
-                    │   └── code-simplifier.md
-                    ├── skills/
-                    └── commands/
+                    └── skills/
+                        └── code-simplifier.md
 ```
 
-### OpenCode 配置结构
+### Agents 配置结构
 ```
-~/.config/opencode/
-├── skills/                        # OpenCode 自动扫描
-│   └── skill-name.md -> symlink
-├── commands/                      # OpenCode 自动扫描
-│   └── command-name.md -> symlink
-└── agents/                        # OpenCode 自动扫描
-    └── agent-name.md -> symlink
+~/.agents/
+└── skills/                        # 技能符号链接
+    └── skill-name.md -> symlink
 ```
 
 ## 高级用法
@@ -199,9 +175,7 @@ opencode-plugin plugin info code-simplifier
 rm -rf ~/.opencode-plugin-cli
 
 # 删除符号链接
-rm -rf ~/.config/opencode/skills/*
-rm -rf ~/.config/opencode/commands/*
-rm -rf ~/.config/opencode/agents/*
+rm -rf ~/.agents/skills/*
 
 # 重新添加 marketplace 和安装插件
 opencode-plugin market add anthropics/claude-plugins-official
@@ -212,11 +186,11 @@ opencode-plugin plugin install code-simplifier
 
 ```bash
 # 检查符号链接
-find ~/.config/opencode -type l -ls
+find ~/.agents -type l -ls
 
 # 查看符号链接目标
-readlink ~/.config/opencode/agents/code-simplifier.md
+readlink ~/.agents/skills/code-simplifier.md
 
 # 验证目标文件存在
-ls -la $(readlink ~/.config/opencode/agents/code-simplifier.md)
+ls -la $(readlink ~/.agents/skills/code-simplifier.md)
 ```
