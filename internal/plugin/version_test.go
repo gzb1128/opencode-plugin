@@ -8,81 +8,72 @@ import (
 	"github.com/opencode/plugin-cli/internal/marketplace"
 )
 
-// --- IsRemoteSource ---
-
 func TestIsRemoteSource(t *testing.T) {
 	resolver := NewVersionResolver()
 
-	t.Run("url type via PluginSource", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "url", URL: "https://example.com/foo.git"}}
+	t.Run("url type", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.URLSource{URL: "https://example.com/foo.git"}}
 		if !resolver.IsRemoteSource(&p) {
 			t.Fatal("expected remote for url type")
 		}
 	})
 
-	t.Run("github type via PluginSource", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "github", Repo: "owner/repo"}}
+	t.Run("github type", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.GitHubSource{Repo: "owner/repo"}}
 		if !resolver.IsRemoteSource(&p) {
 			t.Fatal("expected remote for github type")
 		}
 	})
 
-	t.Run("git-subdir type via PluginSource", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "git-subdir", URL: "https://example.com/repo.git"}}
+	t.Run("git-subdir type", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.GitSubdirSource{URL: "https://example.com/repo.git"}}
 		if !resolver.IsRemoteSource(&p) {
 			t.Fatal("expected remote for git-subdir type")
 		}
 	})
 
-	t.Run("local type via PluginSource", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "local", Path: "./plugins/foo"}}
+	t.Run("git type", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.GitSource{URL: "https://gitlab.com/repo.git"}}
+		if !resolver.IsRemoteSource(&p) {
+			t.Fatal("expected remote for git type")
+		}
+	})
+
+	t.Run("npm type", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "@org/plugin"}}
+		if !resolver.IsRemoteSource(&p) {
+			t.Fatal("expected remote for npm type")
+		}
+	})
+
+	t.Run("pip type", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.PipSource{Package: "my-plugin"}}
+		if !resolver.IsRemoteSource(&p) {
+			t.Fatal("expected remote for pip type")
+		}
+	})
+
+	t.Run("local type", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.LocalSource{Path: "./plugins/foo"}}
 		if resolver.IsRemoteSource(&p) {
 			t.Fatal("local type should not be remote")
 		}
 	})
 
-	t.Run("url type via raw map", func(t *testing.T) {
-		p := marketplace.Plugin{Source: map[string]interface{}{"source": "url", "url": "https://example.com/foo.git"}}
-		if !resolver.IsRemoteSource(&p) {
-			t.Fatal("expected remote for url map type")
-		}
-	})
-
-	t.Run("git-subdir type via raw map", func(t *testing.T) {
-		p := marketplace.Plugin{Source: map[string]interface{}{"source": "git-subdir", "url": "owner/repo"}}
-		if !resolver.IsRemoteSource(&p) {
-			t.Fatal("expected remote for git-subdir map type")
-		}
-	})
-
-	t.Run("relative string source", func(t *testing.T) {
+	t.Run("string source is not remote", func(t *testing.T) {
 		p := marketplace.Plugin{Source: "./plugins/foo"}
 		if resolver.IsRemoteSource(&p) {
-			t.Fatal("relative path should not be remote")
+			t.Fatal("raw string source should not be remote")
 		}
 	})
 }
-
-// --- GetPluginSourcePath ---
 
 func TestGetPluginSourcePath(t *testing.T) {
 	resolver := NewVersionResolver()
 	marketPath := filepath.Join(t.TempDir(), "markets", "test")
 
-	t.Run("relative string source", func(t *testing.T) {
-		p := marketplace.Plugin{Source: "./plugins/my-plugin"}
-		path, err := resolver.GetPluginSourcePath(&p, marketPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		expected := filepath.Join(marketPath, "plugins", "my-plugin")
-		if path != expected {
-			t.Errorf("expected %s, got %s", expected, path)
-		}
-	})
-
-	t.Run("local PluginSource", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "local", Path: "./plugins/foo"}}
+	t.Run("local source", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.LocalSource{Path: "./plugins/foo"}}
 		path, err := resolver.GetPluginSourcePath(&p, marketPath)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -93,126 +84,43 @@ func TestGetPluginSourcePath(t *testing.T) {
 		}
 	})
 
-	t.Run("remote url PluginSource returns error", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "url", URL: "https://example.com"}}
+	t.Run("remote source returns error", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.GitHubSource{Repo: "owner/repo"}}
 		_, err := resolver.GetPluginSourcePath(&p, marketPath)
 		if err == nil {
 			t.Fatal("expected error for remote source")
 		}
 	})
 
-	t.Run("raw map url type returns URL", func(t *testing.T) {
-		p := marketplace.Plugin{Source: map[string]interface{}{"source": "url", "url": "https://example.com/foo.git"}}
-		path, err := resolver.GetPluginSourcePath(&p, marketPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if path != "https://example.com/foo.git" {
-			t.Errorf("expected https://example.com/foo.git, got %s", path)
-		}
-	})
-
-	t.Run("raw map url type with repo shorthand", func(t *testing.T) {
-		p := marketplace.Plugin{Source: map[string]interface{}{"source": "url", "repo": "owner/repo"}}
-		path, err := resolver.GetPluginSourcePath(&p, marketPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if path != "https://github.com/owner/repo.git" {
-			t.Errorf("expected https://github.com/owner/repo.git, got %s", path)
-		}
-	})
-
-	t.Run("raw map git-subdir type returns URL", func(t *testing.T) {
-		p := marketplace.Plugin{Source: map[string]interface{}{"source": "git-subdir", "url": "https://example.com/repo.git"}}
-		path, err := resolver.GetPluginSourcePath(&p, marketPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if path != "https://example.com/repo.git" {
-			t.Errorf("expected https://example.com/repo.git, got %s", path)
-		}
-	})
-
-	t.Run("raw map empty path fallback", func(t *testing.T) {
-		p := marketplace.Plugin{Source: map[string]interface{}{"path": "./plugins/foo"}}
-		path, err := resolver.GetPluginSourcePath(&p, marketPath)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		expected := filepath.Join(marketPath, "plugins", "foo")
-		if path != expected {
-			t.Errorf("expected %s, got %s", expected, path)
+	t.Run("raw string source returns error", func(t *testing.T) {
+		p := marketplace.Plugin{Source: "./plugins/foo"}
+		_, err := resolver.GetPluginSourcePath(&p, marketPath)
+		if err == nil {
+			t.Fatal("expected error for raw string source")
 		}
 	})
 }
 
-// --- toPluginSource ---
+func TestCloneRemotePlugin_UnsupportedTypes(t *testing.T) {
+	resolver := NewVersionResolver()
+	cachePath := filepath.Join(t.TempDir(), "cache")
 
-func TestToPluginSource(t *testing.T) {
-	t.Run("url source with sha", func(t *testing.T) {
-		m := map[string]interface{}{
-			"source": "url",
-			"url":    "https://github.com/ChromeDevTools/chrome-devtools-mcp.git",
-			"sha":    "abc123def456",
-		}
-		ps := toPluginSource(m)
-		if ps.Type != "url" {
-			t.Errorf("expected type 'url', got '%s'", ps.Type)
-		}
-		if ps.URL != "https://github.com/ChromeDevTools/chrome-devtools-mcp.git" {
-			t.Errorf("unexpected URL: %s", ps.URL)
-		}
-		if ps.SHA != "abc123def456" {
-			t.Errorf("expected sha 'abc123def456', got '%s'", ps.SHA)
+	t.Run("npm returns not implemented", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "@org/plugin"}}
+		err := resolver.CloneRemotePlugin(&p, cachePath)
+		if err == nil {
+			t.Fatal("expected error for npm source")
 		}
 	})
 
-	t.Run("github source with repo", func(t *testing.T) {
-		m := map[string]interface{}{
-			"source": "github",
-			"repo":   "owner/repo",
-		}
-		ps := toPluginSource(m)
-		if ps.Type != "github" {
-			t.Errorf("expected type 'github', got '%s'", ps.Type)
-		}
-		if ps.Repo != "owner/repo" {
-			t.Errorf("expected repo 'owner/repo', got '%s'", ps.Repo)
-		}
-		if ps.URL != "https://github.com/owner/repo.git" {
-			t.Errorf("expected URL 'https://github.com/owner/repo.git', got '%s'", ps.URL)
-		}
-	})
-
-	t.Run("git-subdir source", func(t *testing.T) {
-		m := map[string]interface{}{
-			"source": "git-subdir",
-			"url":    "techwolf-ai/ai-first-toolkit",
-			"path":   "plugins/ai-firstify",
-			"ref":    "main",
-			"sha":    "7f18e11d694b",
-		}
-		ps := toPluginSource(m)
-		if ps.Type != "git-subdir" {
-			t.Errorf("expected type 'git-subdir', got '%s'", ps.Type)
-		}
-		if ps.URL != "techwolf-ai/ai-first-toolkit" {
-			t.Errorf("unexpected URL: %s", ps.URL)
-		}
-		if ps.SubPath != "plugins/ai-firstify" {
-			t.Errorf("expected path 'plugins/ai-firstify', got '%s'", ps.SubPath)
-		}
-		if ps.Ref != "main" {
-			t.Errorf("expected ref 'main', got '%s'", ps.Ref)
-		}
-		if ps.SHA != "7f18e11d694b" {
-			t.Errorf("expected sha '7f18e11d694b', got '%s'", ps.SHA)
+	t.Run("pip returns not implemented", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.PipSource{Package: "my-plugin"}}
+		err := resolver.CloneRemotePlugin(&p, cachePath)
+		if err == nil {
+			t.Fatal("expected error for pip source")
 		}
 	})
 }
-
-// --- copyRecursive ---
 
 func TestCopyRecursive(t *testing.T) {
 	t.Run("copies files recursively", func(t *testing.T) {
@@ -252,7 +160,6 @@ func TestCopyRecursive(t *testing.T) {
 		}
 
 		if _, err := os.Stat(filepath.Join(dstDir, ".git")); os.IsNotExist(err) {
-			// This is expected - .git should be skipped
 		} else {
 			t.Error(".git directory should be skipped")
 		}
@@ -297,13 +204,11 @@ func TestCopyRecursive(t *testing.T) {
 	})
 }
 
-// --- resolveRemoteVersion (via Installer) ---
-
 func TestResolveRemoteVersion(t *testing.T) {
 	installer := &Installer{}
 
-	t.Run("sha from PluginSource", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "url", SHA: "abcdef1234567890"}}
+	t.Run("sha from GitHubSource", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.GitHubSource{SHA: "abcdef1234567890abcdef1234567890abcdef12"}}
 		ver, err := installer.resolveRemoteVersion(&p, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -313,41 +218,19 @@ func TestResolveRemoteVersion(t *testing.T) {
 		}
 	})
 
-	t.Run("sha shorter than 12", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "url", SHA: "abc"}}
-		ver, err := installer.resolveRemoteVersion(&p, "")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if ver != "abc" {
-			t.Errorf("expected 'abc', got '%s'", ver)
-		}
-	})
-
-	t.Run("sha from raw map", func(t *testing.T) {
-		p := marketplace.Plugin{Source: map[string]interface{}{"source": "url", "sha": "abcdef1234567890"}}
+	t.Run("sha from URLSource", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.URLSource{SHA: "abcdef1234567890abcdef1234567890abcdef12"}}
 		ver, err := installer.resolveRemoteVersion(&p, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if ver != "abcdef123456" {
 			t.Errorf("expected 'abcdef123456', got '%s'", ver)
-		}
-	})
-
-	t.Run("no sha, no requested version returns latest", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "url"}}
-		ver, err := installer.resolveRemoteVersion(&p, "")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if ver != "latest" {
-			t.Errorf("expected 'latest', got '%s'", ver)
 		}
 	})
 
 	t.Run("no sha, with requested version", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "url"}}
+		p := marketplace.Plugin{Source: &marketplace.GitHubSource{Repo: "owner/repo"}}
 		ver, err := installer.resolveRemoteVersion(&p, "1.0.0")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -357,9 +240,20 @@ func TestResolveRemoteVersion(t *testing.T) {
 		}
 	})
 
-	t.Run("no sha, requested latest returns latest", func(t *testing.T) {
-		p := marketplace.Plugin{Source: marketplace.PluginSource{Type: "url"}}
-		ver, err := installer.resolveRemoteVersion(&p, "latest")
+	t.Run("no sha, no requested returns latest", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.GitHubSource{Repo: "owner/repo"}}
+		ver, err := installer.resolveRemoteVersion(&p, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "latest" {
+			t.Errorf("expected 'latest', got '%s'", ver)
+		}
+	})
+
+	t.Run("npm source no sha returns latest", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "@org/plugin"}}
+		ver, err := installer.resolveRemoteVersion(&p, "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

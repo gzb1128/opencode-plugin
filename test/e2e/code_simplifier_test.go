@@ -37,7 +37,7 @@ func TestE2ECodeSimplifier(t *testing.T) {
 
 	t.Run("AddClaudePluginsOfficial", func(t *testing.T) {
 		// Add the official Claude plugins marketplace
-		mp, err := marketMgr.Add("claude-plugins-official", "anthropics/claude-plugins-official")
+		mp, _, err := marketMgr.Add("claude-plugins-official", "anthropics/claude-plugins-official")
 		if err != nil {
 			t.Fatalf("Failed to add marketplace: %v", err)
 		}

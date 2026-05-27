@@ -25,29 +25,24 @@ func NewVersionResolver() *VersionResolver {
 }
 
 func (v *VersionResolver) Resolve(pluginPath string, requested string) (string, error) {
-	// If version is specified, use it
 	if requested != "" && requested != "latest" {
 		return requested, nil
 	}
 
-	// Try to read plugin.json version
 	pluginJSONPath := filepath.Join(pluginPath, ".claude-plugin", "plugin.json")
 	version, err := v.readPluginJSONVersion(pluginJSONPath)
 	if err == nil && version != "" && version != "latest" {
 		return version, nil
 	}
 
-	// Try to get git SHA
 	sha, err := v.gitClient.GetCommitSHA(pluginPath)
 	if err == nil && sha != "" {
-		// Use first 12 characters of SHA
 		if len(sha) > 12 {
 			return sha[:12], nil
 		}
 		return sha, nil
 	}
 
-	// Fallback to "latest"
 	return "latest", nil
 }
 
@@ -83,133 +78,62 @@ func (g *GitClient) GetCommitSHA(path string) (string, error) {
 }
 
 func (v *VersionResolver) GetPluginSourcePath(plugin *marketplace.Plugin, marketPath string) (string, error) {
-	switch src := plugin.Source.(type) {
-	case string:
-		return filepath.Join(marketPath, src), nil
-
-	case marketplace.PluginSource:
-		switch src.Type {
-		case string(marketplace.SourceTypeLocal):
-			return filepath.Join(marketPath, src.Path), nil
-		default:
-			return "", fmt.Errorf("unsupported plugin source type: %s (plugin may need to be cloned first)", src.Type)
-		}
-
-	case map[string]interface{}:
-		sourceType, _ := src["source"].(string)
-		switch sourceType {
-		case "url", "github":
-			return v.getRemoteSourceURL(src)
-		case "git-subdir":
-			return v.getGitSubdirSource(src)
-		case "":
-			if path, ok := src["path"].(string); ok {
-				return filepath.Join(marketPath, path), nil
-			}
-		}
+	src, ok := plugin.Source.(marketplace.PluginSource)
+	if !ok {
 		return "", fmt.Errorf("invalid plugin source format")
+	}
 
+	switch s := src.(type) {
+	case *marketplace.LocalSource:
+		return filepath.Join(marketPath, s.Path), nil
 	default:
-		return "", fmt.Errorf("invalid plugin source format")
+		return "", fmt.Errorf("unsupported plugin source type: %s (plugin may need to be cloned first)", src.SourceType())
 	}
 }
 
-func (v *VersionResolver) getRemoteSourceURL(src map[string]interface{}) (string, error) {
-	url, _ := src["url"].(string)
-	if url == "" {
-		repo, _ := src["repo"].(string)
-		if repo != "" {
-			url = "https://github.com/" + repo + ".git"
-		}
-	}
-	if url == "" {
-		return "", fmt.Errorf("plugin source has no URL or repo")
-	}
-	return url, nil
-}
-
-func (v *VersionResolver) getGitSubdirSource(src map[string]interface{}) (string, error) {
-	url, _ := src["url"].(string)
-	if url == "" {
-		return "", fmt.Errorf("git-subdir source has no URL")
-	}
-	return url, nil
-}
-
-// IsRemoteSource checks if a plugin needs to be cloned from a remote repository
 func (v *VersionResolver) IsRemoteSource(plugin *marketplace.Plugin) bool {
-	switch src := plugin.Source.(type) {
-	case marketplace.PluginSource:
-		switch src.Type {
-		case "url", "github", "git-subdir":
-			return true
-		}
-	case map[string]interface{}:
-		sourceType, _ := src["source"].(string)
-		switch sourceType {
-		case "url", "github", "git-subdir":
-			return true
-		}
+	src, ok := plugin.Source.(marketplace.PluginSource)
+	if !ok {
+		return false
 	}
-	return false
+
+	switch src.(type) {
+	case *marketplace.GitHubSource, *marketplace.URLSource, *marketplace.GitSource, *marketplace.GitSubdirSource, *marketplace.NpmSource, *marketplace.PipSource:
+		return true
+	default:
+		return false
+	}
 }
 
-// CloneRemotePlugin clones a remote plugin source to cache directory
 func (v *VersionResolver) CloneRemotePlugin(plugin *marketplace.Plugin, cachePath string) error {
-	switch src := plugin.Source.(type) {
-	case marketplace.PluginSource:
-		return v.clonePluginSource(&src, cachePath)
-	case map[string]interface{}:
-		ps := toPluginSource(src)
-		return v.clonePluginSource(ps, cachePath)
-	default:
+	src, ok := plugin.Source.(marketplace.PluginSource)
+	if !ok {
 		return fmt.Errorf("invalid plugin source format")
 	}
+	return v.clonePluginSource(src, cachePath)
 }
 
-func toPluginSource(src map[string]interface{}) *marketplace.PluginSource {
-	ps := &marketplace.PluginSource{Type: src["source"].(string)}
-	if v, ok := src["url"].(string); ok {
-		ps.URL = v
-	}
-	if v, ok := src["repo"].(string); ok {
-		ps.Repo = v
-		if ps.URL == "" {
-			ps.URL = "https://github.com/" + v + ".git"
-		}
-	}
-	if v, ok := src["path"].(string); ok {
-		ps.SubPath = v
-	}
-	if v, ok := src["ref"].(string); ok {
-		ps.Ref = v
-	}
-	if v, ok := src["sha"].(string); ok {
-		ps.SHA = v
-	}
-	return ps
-}
-
-func (v *VersionResolver) clonePluginSource(src *marketplace.PluginSource, cachePath string) error {
-	switch src.Type {
-	case "url", "github":
-		return v.cloneURLSource(src, cachePath)
-	case "git-subdir":
-		return v.cloneGitSubdirSource(src, cachePath)
+func (v *VersionResolver) clonePluginSource(src marketplace.PluginSource, cachePath string) error {
+	switch s := src.(type) {
+	case *marketplace.GitHubSource:
+		gitURL := "https://github.com/" + s.Repo + ".git"
+		return v.cloneGitSource(gitURL, s.Ref, s.SHA, cachePath)
+	case *marketplace.URLSource:
+		return v.cloneGitSource(s.URL, s.Ref, s.SHA, cachePath)
+	case *marketplace.GitSource:
+		return v.cloneGitSource(s.URL, s.Ref, s.SHA, cachePath)
+	case *marketplace.GitSubdirSource:
+		return v.cloneGitSubdirSource(s, cachePath)
+	case *marketplace.NpmSource:
+		return fmt.Errorf("npm source installation not yet implemented for package: %s", s.Package)
+	case *marketplace.PipSource:
+		return fmt.Errorf("pip source installation not yet implemented for package: %s", s.Package)
 	default:
-		return fmt.Errorf("source type '%s' is not a remote source", src.Type)
+		return fmt.Errorf("source type '%s' is not a remote source", src.SourceType())
 	}
 }
 
-func (v *VersionResolver) cloneURLSource(src *marketplace.PluginSource, cachePath string) error {
-	gitURL := src.URL
-	if gitURL == "" && src.Repo != "" {
-		gitURL = "https://github.com/" + src.Repo + ".git"
-	}
-	if gitURL == "" {
-		return fmt.Errorf("plugin source has no URL or repo")
-	}
-
+func (v *VersionResolver) cloneGitSource(gitURL, ref, sha, cachePath string) error {
 	if _, err := os.Stat(cachePath); err == nil {
 		os.RemoveAll(cachePath)
 	}
@@ -226,36 +150,21 @@ func (v *VersionResolver) cloneURLSource(src *marketplace.PluginSource, cachePat
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 
-	if src.SHA != "" {
-		repo, err := git.PlainOpen(cachePath)
-		if err != nil {
-			return fmt.Errorf("failed to open repository: %w", err)
+	if sha != "" {
+		if err := checkoutSHA(cachePath, sha); err != nil {
+			return err
 		}
-		worktree, err := repo.Worktree()
-		if err != nil {
-			return fmt.Errorf("failed to get worktree: %w", err)
-		}
-		hash, err := repo.ResolveRevision(plumbing.Revision(src.SHA))
-		if err != nil {
-			return fmt.Errorf("failed to resolve SHA %s: %w", src.SHA, err)
-		}
-		if err := worktree.Checkout(&git.CheckoutOptions{Hash: *hash}); err != nil {
-			return fmt.Errorf("failed to checkout SHA %s: %w", src.SHA, err)
+	} else if ref != "" {
+		if err := checkoutRef(cachePath, ref); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func (v *VersionResolver) cloneGitSubdirSource(src *marketplace.PluginSource, cachePath string) error {
+func (v *VersionResolver) cloneGitSubdirSource(src *marketplace.GitSubdirSource, cachePath string) error {
 	gitURL := src.URL
-	if gitURL == "" && src.Repo != "" {
-		gitURL = "https://github.com/" + src.Repo + ".git"
-	}
-	if gitURL == "" {
-		return fmt.Errorf("git-subdir source requires 'url'")
-	}
-	subPath := src.SubPath
 
 	if _, err := os.Stat(cachePath); err == nil {
 		os.RemoveAll(cachePath)
@@ -276,38 +185,18 @@ func (v *VersionResolver) cloneGitSubdirSource(src *marketplace.PluginSource, ca
 	}
 
 	if src.SHA != "" {
-		repo, err := git.PlainOpen(tempDir)
-		if err != nil {
-			return fmt.Errorf("failed to open repository: %w", err)
-		}
-		worktree, err := repo.Worktree()
-		if err != nil {
-			return fmt.Errorf("failed to get worktree: %w", err)
-		}
-		hash, err := repo.ResolveRevision(plumbing.Revision(src.SHA))
-		if err != nil {
-			return fmt.Errorf("failed to resolve SHA %s: %w", src.SHA, err)
-		}
-		if err := worktree.Checkout(&git.CheckoutOptions{Hash: *hash}); err != nil {
-			return fmt.Errorf("failed to checkout SHA %s: %w", src.SHA, err)
+		if err := checkoutSHA(tempDir, src.SHA); err != nil {
+			return err
 		}
 	} else if src.Ref != "" {
-		repo, err := git.PlainOpen(tempDir)
-		if err != nil {
-			return fmt.Errorf("failed to open repository: %w", err)
-		}
-		worktree, err := repo.Worktree()
-		if err != nil {
-			return fmt.Errorf("failed to get worktree: %w", err)
-		}
-		if err := worktree.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(src.Ref)}); err != nil {
-			return fmt.Errorf("failed to checkout ref %s: %w", src.Ref, err)
+		if err := checkoutRef(tempDir, src.Ref); err != nil {
+			return err
 		}
 	}
 
-	srcDir := filepath.Join(tempDir, subPath)
+	srcDir := filepath.Join(tempDir, src.SubPath)
 	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-		return fmt.Errorf("subdirectory '%s' not found in repository", subPath)
+		return fmt.Errorf("subdirectory '%s' not found in repository", src.SubPath)
 	}
 
 	if err := copyRecursive(srcDir, cachePath); err != nil {
@@ -315,6 +204,48 @@ func (v *VersionResolver) cloneGitSubdirSource(src *marketplace.PluginSource, ca
 	}
 
 	return nil
+}
+
+func checkoutSHA(repoPath, sha string) error {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+	hash, err := repo.ResolveRevision(plumbing.Revision(sha))
+	if err != nil {
+		return fmt.Errorf("failed to resolve SHA %s: %w", sha, err)
+	}
+	if err := worktree.Checkout(&git.CheckoutOptions{Hash: *hash}); err != nil {
+		return fmt.Errorf("failed to checkout SHA %s: %w", sha, err)
+	}
+	return nil
+}
+
+func checkoutRef(repoPath, ref string) error {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	branchErr := worktree.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(ref)})
+	if branchErr == nil {
+		return nil
+	}
+
+	tagErr := worktree.Checkout(&git.CheckoutOptions{Branch: plumbing.NewTagReferenceName(ref)})
+	if tagErr == nil {
+		return nil
+	}
+
+	return fmt.Errorf("failed to checkout ref %s: not found as branch (%v) or tag (%v)", ref, branchErr, tagErr)
 }
 
 func copyRecursive(src, dst string) error {
@@ -355,21 +286,18 @@ func copyRecursive(src, dst string) error {
 func (v *VersionResolver) GetAvailableVersions(pluginPath string) ([]string, error) {
 	versions := []string{}
 
-	// Check plugin.json version
 	pluginJSONPath := filepath.Join(pluginPath, ".claude-plugin", "plugin.json")
 	version, err := v.readPluginJSONVersion(pluginJSONPath)
 	if err == nil && version != "" {
 		versions = append(versions, version)
 	}
 
-	// Check git tags
 	repo, err := git.PlainOpen(pluginPath)
 	if err == nil {
 		tags, err := repo.Tags()
 		if err == nil {
 			tags.ForEach(func(ref *plumbing.Reference) error {
 				tagName := ref.Name().Short()
-				// Only include version-like tags (e.g., v1.0.0, 1.0.0)
 				if strings.HasPrefix(tagName, "v") || strings.HasPrefix(tagName, "0") || strings.HasPrefix(tagName, "1") || strings.HasPrefix(tagName, "2") {
 					versions = append(versions, tagName)
 				}
@@ -378,7 +306,6 @@ func (v *VersionResolver) GetAvailableVersions(pluginPath string) ([]string, err
 		}
 	}
 
-	// Always add "latest" as an option
 	versions = append(versions, "latest")
 
 	return versions, nil

@@ -18,41 +18,47 @@ func NewManager(marketsDir string) *Manager {
 	}
 }
 
-func (m *Manager) Add(name, url string) (*Marketplace, error) {
+func (m *Manager) Add(name, url string) (*Marketplace, MarketSource, error) {
 	source, err := ParseMarketplaceSource(url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse marketplace source: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse marketplace source: %w", err)
 	}
 
 	marketDir := filepath.Join(m.marketsDir, name)
 
-	switch source.Type {
-	case string(SourceTypeGitHub), string(SourceTypeGit):
-		if err := m.gitClient.CloneOrPull(source.URL, marketDir); err != nil {
-			return nil, fmt.Errorf("failed to clone/pull repository: %w", err)
+	switch s := source.(type) {
+	case *GitHubMarketSource, *GitMarketSource:
+		cloneURL := GetMarketSourceURL(source)
+		if err := m.gitClient.CloneOrPull(cloneURL, marketDir); err != nil {
+			return nil, nil, fmt.Errorf("failed to clone/pull repository: %w", err)
 		}
 
-	case string(SourceTypeJSONURL):
-		return nil, fmt.Errorf("JSON URL marketplace not yet implemented")
+	case *URLMarketSource:
+		return nil, nil, fmt.Errorf("JSON URL marketplace not yet implemented")
 
-	case string(SourceTypeLocal):
-		marketDir = source.Path
+	case *LocalMarketSource, *DirectoryMarketSource:
+		marketDir = GetMarketSourcePath(source)
+
+	case *FileMarketSource:
+		marketDir = marketplaceRootForIndexPath(s.Path)
 
 	default:
-		return nil, fmt.Errorf("unsupported source type: %s", source.Type)
+		return nil, nil, fmt.Errorf("unsupported source type: %s", source.SourceType())
 	}
 
-	indexPath := filepath.Join(marketDir, ".claude-plugin", "marketplace.json")
+	source.SetInstallLocation(marketDir)
+
+	indexPath := MarketSourceIndexPath(source)
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("marketplace.json not found at %s", indexPath)
+		return nil, nil, fmt.Errorf("marketplace.json not found at %s", indexPath)
 	}
 
 	marketplace, err := ParseMarketplaceIndex(indexPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse marketplace.json: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse marketplace.json: %w", err)
 	}
 
-	return marketplace, nil
+	return marketplace, source, nil
 }
 
 func (m *Manager) Get(marketDir string) (*Marketplace, error) {
@@ -73,27 +79,14 @@ func (m *Manager) List(marketDirs map[string]string) (map[string]*Marketplace, e
 	return result, nil
 }
 
-func (m *Manager) Update(marketDir string) error {
-	if err := m.gitClient.Pull(marketDir); err != nil {
-		return fmt.Errorf("failed to update marketplace: %w", err)
-	}
-
-	indexPath := filepath.Join(marketDir, ".claude-plugin", "marketplace.json")
-	if _, err := ParseMarketplaceIndex(indexPath); err != nil {
-		return fmt.Errorf("failed to parse updated marketplace.json: %w", err)
-	}
-
-	return nil
-}
-
-func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, marketName string) (*Plugin, *MarketSource, string, error) {
+func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, marketName string) (*Plugin, MarketSource, string, error) {
 	if marketName != "" {
 		market, ok := markets[marketName]
 		if !ok {
 			return nil, nil, "", fmt.Errorf("marketplace %s not found", marketName)
 		}
 
-		indexPath := filepath.Join(market.InstallLocation, ".claude-plugin", "marketplace.json")
+		indexPath := MarketSourceIndexPath(market)
 		marketplace, err := ParseMarketplaceIndex(indexPath)
 		if err != nil {
 			return nil, nil, "", err
@@ -101,7 +94,7 @@ func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, market
 
 		for _, plugin := range marketplace.Plugins {
 			if plugin.Name == pluginName {
-				return &plugin, &market, marketName, nil
+				return &plugin, market, marketName, nil
 			}
 		}
 
@@ -109,7 +102,7 @@ func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, market
 	}
 
 	for mName, market := range markets {
-		indexPath := filepath.Join(market.InstallLocation, ".claude-plugin", "marketplace.json")
+		indexPath := MarketSourceIndexPath(market)
 		marketplace, err := ParseMarketplaceIndex(indexPath)
 		if err != nil {
 			continue
@@ -117,7 +110,7 @@ func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, market
 
 		for _, plugin := range marketplace.Plugins {
 			if plugin.Name == pluginName {
-				return &plugin, &market, mName, nil
+				return &plugin, market, mName, nil
 			}
 		}
 	}
@@ -126,14 +119,27 @@ func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, market
 }
 
 func (m *Manager) Remove(name string) error {
-	// This is a helper method that removes a marketplace directory
-	// The actual config removal is handled by the caller
 	paths := m.marketsDir
 	marketDir := filepath.Join(paths, name)
 
 	if _, err := os.Stat(marketDir); os.IsNotExist(err) {
-		return nil // Directory doesn't exist, nothing to remove
+		return nil
 	}
 
 	return os.RemoveAll(marketDir)
+}
+
+func MarketSourceIndexPath(source MarketSource) string {
+	if fileSource, ok := source.(*FileMarketSource); ok && fileSource.Path != "" {
+		return fileSource.Path
+	}
+	return filepath.Join(source.InstallLocation(), ".claude-plugin", "marketplace.json")
+}
+
+func marketplaceRootForIndexPath(indexPath string) string {
+	dir := filepath.Dir(indexPath)
+	if filepath.Base(dir) == ".claude-plugin" {
+		return filepath.Dir(dir)
+	}
+	return dir
 }

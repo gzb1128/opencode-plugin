@@ -48,13 +48,8 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 		return err
 	}
 
-	// Update opts.MarketName with the actual marketplace name
 	opts.MarketName = marketName
-
-	marketPath, ok := marketSrc["installLocation"].(string)
-	if !ok {
-		return fmt.Errorf("marketplace install location not found")
-	}
+	marketPath := marketSrc.InstallLocation()
 
 	isRemote := i.resolver.IsRemoteSource(plugin)
 	var pluginPath string
@@ -175,21 +170,31 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 }
 
 func (i *Installer) resolveRemoteVersion(plugin *marketplace.Plugin, requested string) (string, error) {
-	switch src := plugin.Source.(type) {
-	case marketplace.PluginSource:
-		if src.SHA != "" {
-			if len(src.SHA) > 12 {
-				return src.SHA[:12], nil
-			}
-			return src.SHA, nil
+	src, ok := plugin.Source.(marketplace.PluginSource)
+	if !ok {
+		if requested != "" && requested != "latest" {
+			return requested, nil
 		}
-	case map[string]interface{}:
-		if sha, ok := src["sha"].(string); ok && sha != "" {
-			if len(sha) > 12 {
-				return sha[:12], nil
-			}
-			return sha, nil
+		return "latest", nil
+	}
+
+	var sha string
+	switch s := src.(type) {
+	case *marketplace.GitHubSource:
+		sha = s.SHA
+	case *marketplace.URLSource:
+		sha = s.SHA
+	case *marketplace.GitSource:
+		sha = s.SHA
+	case *marketplace.GitSubdirSource:
+		sha = s.SHA
+	}
+
+	if sha != "" {
+		if len(sha) > 12 {
+			return sha[:12], nil
 		}
+		return sha, nil
 	}
 
 	if requested != "" && requested != "latest" {
@@ -216,26 +221,10 @@ func (i *Installer) installMCP(pluginPath, pluginName string) (int, error) {
 	return len(servers), nil
 }
 
-func (i *Installer) findPlugin(markets map[string]map[string]interface{}, pluginName, marketName string) (*marketplace.Plugin, map[string]interface{}, string, error) {
+func (i *Installer) findPlugin(markets map[string]map[string]interface{}, pluginName, marketName string) (*marketplace.Plugin, marketplace.MarketSource, string, error) {
 	marketSources := make(map[string]marketplace.MarketSource)
 	for name, src := range markets {
-		ms := marketplace.MarketSource{}
-		if v, ok := src["source"].(string); ok {
-			ms.Type = v
-		}
-		if v, ok := src["repo"].(string); ok {
-			ms.Repo = v
-		}
-		if v, ok := src["url"].(string); ok {
-			ms.URL = v
-		}
-		if v, ok := src["path"].(string); ok {
-			ms.Path = v
-		}
-		if v, ok := src["installLocation"].(string); ok {
-			ms.InstallLocation = v
-		}
-		marketSources[name] = ms
+		marketSources[name] = marketplace.NewMarketSourceFromConfig(src)
 	}
 
 	plugin, ms, foundMarketName, err := i.marketMgr.FindPlugin(marketSources, pluginName, marketName)
@@ -243,15 +232,7 @@ func (i *Installer) findPlugin(markets map[string]map[string]interface{}, plugin
 		return nil, nil, "", err
 	}
 
-	result := map[string]interface{}{
-		"source":          ms.Type,
-		"repo":            ms.Repo,
-		"url":             ms.URL,
-		"path":            ms.Path,
-		"installLocation": ms.InstallLocation,
-	}
-
-	return plugin, result, foundMarketName, nil
+	return plugin, ms, foundMarketName, nil
 }
 
 func (i *Installer) copyPluginToCache(src, dst string) error {
@@ -259,13 +240,11 @@ func (i *Installer) copyPluginToCache(src, dst string) error {
 		return err
 	}
 
-	// Read all entries in source directory
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return fmt.Errorf("failed to read source directory: %w", err)
 	}
 
-	// Files/directories to skip (hidden files starting with . are included except .git)
 	skipItems := map[string]bool{
 		".git": true,
 	}
@@ -273,7 +252,6 @@ func (i *Installer) copyPluginToCache(src, dst string) error {
 	for _, entry := range entries {
 		name := entry.Name()
 
-		// Skip items in skip list
 		if skipItems[name] {
 			continue
 		}
@@ -343,7 +321,6 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 		fmt.Printf("⚠️  Error removing symlinks: %v\n", err)
 	}
 
-	// Remove MCP servers
 	if err := i.mcpManager.UninstallMCPConfig(pluginName); err != nil {
 		fmt.Printf("⚠️  Warning: Failed to uninstall MCP servers: %v\n", err)
 	}

@@ -46,9 +46,6 @@ Examples:
 			keyword = strings.ToLower(args[0])
 		}
 
-		paths := configMgr.GetPaths()
-		mgr := marketplace.NewManager(paths.MarketsDir)
-
 		totalPlugins := 0
 		foundMarkets := 0
 		skippedMarkets := []string{}
@@ -59,12 +56,9 @@ Examples:
 				continue
 			}
 
-			installLoc, ok := market["installLocation"].(string)
-			if !ok {
-				continue
-			}
+			source := marketplace.NewMarketSourceFromConfig(market)
 
-			mp, err := mgr.Get(installLoc)
+			mp, err := marketplace.ParseMarketplaceIndex(marketplace.MarketSourceIndexPath(source))
 			if err != nil {
 				// Marketplace not cloned yet, track it
 				skippedMarkets = append(skippedMarkets, mName)

@@ -48,23 +48,7 @@ Examples:
 		// Convert to MarketSource format
 		marketSources := make(map[string]marketplace.MarketSource)
 		for name, src := range markets {
-			ms := marketplace.MarketSource{}
-			if v, ok := src["source"].(string); ok {
-				ms.Type = v
-			}
-			if v, ok := src["repo"].(string); ok {
-				ms.Repo = v
-			}
-			if v, ok := src["url"].(string); ok {
-				ms.URL = v
-			}
-			if v, ok := src["path"].(string); ok {
-				ms.Path = v
-			}
-			if v, ok := src["installLocation"].(string); ok {
-				ms.InstallLocation = v
-			}
-			marketSources[name] = ms
+			marketSources[name] = marketplace.NewMarketSourceFromConfig(src)
 		}
 
 		// Find plugin
@@ -83,7 +67,7 @@ Examples:
 
 		// Get plugin path
 		resolver := plugin.NewVersionResolver()
-		pluginPath, err := resolver.GetPluginSourcePath(p, market.InstallLocation)
+		pluginPath, err := resolver.GetPluginSourcePath(p, market.InstallLocation())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

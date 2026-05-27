@@ -4,7 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
+)
+
+var (
+	nonASCII = regexp.MustCompile(`[^\x20-\x7E]`)
+	shaRegex = regexp.MustCompile(`^[a-f0-9]{7,40}$`)
 )
 
 func ParseMarketplaceIndex(path string) (*Marketplace, error) {
@@ -18,74 +24,182 @@ func ParseMarketplaceIndex(path string) (*Marketplace, error) {
 		return nil, fmt.Errorf("failed to parse marketplace.json: %w", err)
 	}
 
-	if marketplace.Name == "" {
-		return nil, fmt.Errorf("marketplace.json must have a 'name' field")
+	if err := ValidateMarketplaceName(marketplace.Name); err != nil {
+		return nil, err
 	}
 
 	for i, plugin := range marketplace.Plugins {
-		if err := parsePluginSource(&plugin); err != nil {
+		src, err := parsePluginSource(plugin.Source)
+		if err != nil {
 			return nil, fmt.Errorf("failed to parse source for plugin %s: %w", plugin.Name, err)
 		}
-		marketplace.Plugins[i] = plugin
+		marketplace.Plugins[i].Source = src
 	}
 
 	return &marketplace, nil
 }
 
-func parsePluginSource(plugin *Plugin) error {
-	switch v := plugin.Source.(type) {
+func ValidateMarketplaceName(name string) error {
+	if name == "" {
+		return fmt.Errorf("marketplace.json must have a 'name' field")
+	}
+	if strings.Contains(name, " ") {
+		return fmt.Errorf("marketplace name cannot contain spaces: %q", name)
+	}
+	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return fmt.Errorf("marketplace name cannot contain path separators: %q", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("marketplace name cannot contain '..': %q", name)
+	}
+	if name == "." {
+		return fmt.Errorf("marketplace name cannot be '.'")
+	}
+	if nonASCII.MatchString(name) {
+		return fmt.Errorf("marketplace name cannot contain non-ASCII characters: %q", name)
+	}
+	return nil
+}
+
+func parsePluginSource(raw interface{}) (PluginSource, error) {
+	switch v := raw.(type) {
 	case string:
-		plugin.Source = PluginSource{
-			Type: string(SourceTypeLocal),
-			Path: v,
-		}
+		return &LocalSource{Path: v}, nil
+
 	case map[string]interface{}:
 		sourceType, ok := v["source"].(string)
 		if !ok {
-			return fmt.Errorf("source must have a 'source' field")
+			return nil, fmt.Errorf("source must have a 'source' field")
 		}
-
-		ps := PluginSource{Type: sourceType}
 
 		switch sourceType {
 		case string(SourceTypeGitHub):
-			if repo, ok := v["repo"].(string); ok {
-				ps.Repo = repo
-				ps.URL = fmt.Sprintf("https://github.com/%s.git", repo)
+			repo, _ := v["repo"].(string)
+			if repo == "" {
+				return nil, fmt.Errorf("github source must have a 'repo' field")
 			}
-		case string(SourceTypeGit), "url":
-			if url, ok := v["url"].(string); ok {
-				ps.URL = url
+			sha, _ := v["sha"].(string)
+			if sha != "" {
+				if err := validateSHA(sha); err != nil {
+					return nil, err
+				}
 			}
-			if sha, ok := v["sha"].(string); ok {
-				ps.SHA = sha
+			return &GitHubSource{
+				Repo: repo,
+				Ref:  optionalString(v, "ref"),
+				SHA:  sha,
+			}, nil
+
+		case string(SourceTypeGit):
+			url, _ := v["url"].(string)
+			if url == "" {
+				return nil, fmt.Errorf("git source must have a 'url' field")
 			}
-		case "git-subdir":
-			if url, ok := v["url"].(string); ok {
-				ps.URL = url
+			sha, _ := v["sha"].(string)
+			if sha != "" {
+				if err := validateSHA(sha); err != nil {
+					return nil, err
+				}
 			}
-			if repo, ok := v["repo"].(string); ok && ps.URL == "" {
-				ps.URL = "https://github.com/" + repo + ".git"
+			return &GitSource{
+				URL: url,
+				Ref: optionalString(v, "ref"),
+				SHA: sha,
+			}, nil
+
+		case string(SourceTypeGitSubdir):
+			url := resolveGitSubdirURL(v)
+			if url == "" {
+				return nil, fmt.Errorf("git-subdir source must have a 'url' or 'repo' field")
 			}
-			// Convert GitHub shorthand to full URL
-			if ps.URL != "" && !strings.HasPrefix(ps.URL, "http://") && !strings.HasPrefix(ps.URL, "https://") && !strings.HasPrefix(ps.URL, "git@") {
-				ps.URL = "https://github.com/" + ps.URL + ".git"
+			subPath, _ := v["path"].(string)
+			if subPath == "" {
+				return nil, fmt.Errorf("git-subdir source must have a 'path' field")
 			}
-			if path, ok := v["path"].(string); ok {
-				ps.SubPath = path
+			sha, _ := v["sha"].(string)
+			if sha != "" {
+				if err := validateSHA(sha); err != nil {
+					return nil, err
+				}
 			}
-			if ref, ok := v["ref"].(string); ok {
-				ps.Ref = ref
+			return &GitSubdirSource{
+				URL:     url,
+				SubPath: subPath,
+				Ref:     optionalString(v, "ref"),
+				SHA:     sha,
+			}, nil
+
+		case string(SourceTypeURL):
+			url, _ := v["url"].(string)
+			if url == "" {
+				return nil, fmt.Errorf("url source must have a 'url' field")
 			}
-			if sha, ok := v["sha"].(string); ok {
-				ps.SHA = sha
+			sha, _ := v["sha"].(string)
+			if sha != "" {
+				if err := validateSHA(sha); err != nil {
+					return nil, err
+				}
 			}
+			return &URLSource{
+				URL: url,
+				Ref: optionalString(v, "ref"),
+				SHA: sha,
+			}, nil
+
+		case string(SourceTypeNpm):
+			pkg, _ := v["package"].(string)
+			if pkg == "" {
+				return nil, fmt.Errorf("npm source must have a 'package' field")
+			}
+			return &NpmSource{
+				Package:  pkg,
+				Version:  optionalString(v, "version"),
+				Registry: optionalString(v, "registry"),
+			}, nil
+
+		case string(SourceTypePip):
+			pkg, _ := v["package"].(string)
+			if pkg == "" {
+				return nil, fmt.Errorf("pip source must have a 'package' field")
+			}
+			return &PipSource{
+				Package:  pkg,
+				Version:  optionalString(v, "version"),
+				Registry: optionalString(v, "registry"),
+			}, nil
+
+		default:
+			return nil, fmt.Errorf("unsupported source type: %s", sourceType)
 		}
 
-		plugin.Source = ps
 	default:
-		return fmt.Errorf("invalid source format")
+		return nil, fmt.Errorf("invalid source format")
+	}
+}
+
+func resolveGitSubdirURL(v map[string]interface{}) string {
+	url, _ := v["url"].(string)
+	repo, _ := v["repo"].(string)
+
+	if url == "" && repo != "" {
+		url = "https://github.com/" + repo + ".git"
 	}
 
+	if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "git@") {
+		url = "https://github.com/" + url + ".git"
+	}
+
+	return url
+}
+
+func validateSHA(sha string) error {
+	if !shaRegex.MatchString(sha) {
+		return fmt.Errorf("SHA must be a 7-40 character lowercase hex string, got: %q", sha)
+	}
 	return nil
+}
+
+func optionalString(v map[string]interface{}, key string) string {
+	s, _ := v[key].(string)
+	return s
 }

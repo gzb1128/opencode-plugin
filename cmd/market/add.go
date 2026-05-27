@@ -3,6 +3,7 @@ package market
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/opencode/plugin-cli/internal/config"
 	"github.com/opencode/plugin-cli/internal/marketplace"
@@ -45,26 +46,28 @@ Examples:
 		mgr := marketplace.NewManager(paths.MarketsDir)
 
 		fmt.Printf("Adding marketplace from: %s\n", url)
-		fmt.Printf("  Type: %s\n", source.Type)
-		if source.Repo != "" {
-			fmt.Printf("  Repo: %s\n", source.Repo)
+		fmt.Printf("  Type: %s\n", source.SourceType())
+
+		repo := marketplace.GetMarketSourceRepo(source)
+		if repo != "" {
+			fmt.Printf("  Repo: %s\n", repo)
 		}
-		if source.URL != "" {
-			fmt.Printf("  URL: %s\n", source.URL)
+		displayURL := marketplace.GetMarketSourceURL(source)
+		if displayURL != "" {
+			fmt.Printf("  URL: %s\n", displayURL)
 		}
-		if source.Path != "" {
-			fmt.Printf("  Path: %s\n", source.Path)
+		displayPath := marketplace.GetMarketSourcePath(source)
+		if displayPath != "" {
+			fmt.Printf("  Path: %s\n", displayPath)
 		}
 
-		// Determine marketplace name
 		name := cmd.Flag("name").Value.String()
 		if name == "" {
-			if source.Repo != "" {
-				name = source.Repo
-			} else if source.URL != "" {
-				// Extract name from URL
-				name = extractNameFromURL(source.URL)
-			} else if source.Path != "" {
+			if repo != "" {
+				name = extractNameFromRepo(repo)
+			} else if displayURL != "" {
+				name = extractNameFromURL(displayURL)
+			} else if displayPath != "" {
 				name = "local-marketplace"
 			} else {
 				fmt.Fprintf(os.Stderr, "Error: Cannot determine marketplace name. Please specify with --name flag.\n")
@@ -72,26 +75,21 @@ Examples:
 			}
 		}
 
-		mp, err := mgr.Add(name, url)
+		if err := marketplace.ValidateMarketplaceName(name); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Invalid marketplace name: %v\n", err)
+			os.Exit(1)
+		}
+
+		mp, resultSource, err := mgr.Add(name, url)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to add marketplace: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Get the install location
-		installLocation := paths.MarketsDir + "/" + name
-		if source.Type == string(marketplace.SourceTypeLocal) {
-			installLocation = source.Path
-		}
+		installLocation := resultSource.InstallLocation()
 
-		// Save to config
-		marketSrc := map[string]interface{}{
-			"source":          source.Type,
-			"repo":            source.Repo,
-			"url":             source.URL,
-			"path":            source.Path,
-			"installLocation": installLocation,
-		}
+		marketSrc := marketplace.MarketSourceToConfig(resultSource)
+		marketSrc["installLocation"] = installLocation
 
 		if err := configMgr.AddKnownMarket(name, marketSrc); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to save marketplace config: %v\n", err)
@@ -104,18 +102,19 @@ Examples:
 	},
 }
 
-func extractNameFromURL(url string) string {
-	// Extract name from GitHub URL
-	// e.g., "https://github.com/owner/repo.git" -> "owner/repo"
-	// e.g., "git@github.com:owner/repo.git" -> "owner/repo"
+func extractNameFromRepo(repo string) string {
+	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+		return repo[idx+1:]
+	}
+	return repo
+}
 
-	// Remove .git suffix
+func extractNameFromURL(url string) string {
 	name := url
 	if len(name) > 4 && name[len(name)-4:] == ".git" {
 		name = name[:len(name)-4]
 	}
 
-	// Find last / or :
 	lastSep := -1
 	for i := len(name) - 1; i >= 0; i-- {
 		if name[i] == '/' || name[i] == ':' {

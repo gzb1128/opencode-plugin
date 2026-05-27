@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/opencode/plugin-cli/internal/config"
+	"github.com/opencode/plugin-cli/internal/marketplace"
 	"github.com/spf13/cobra"
 )
 
@@ -56,8 +57,8 @@ var listCmd = &cobra.Command{
 			if hasInstallLoc && installLoc != "" {
 				fmt.Printf("    Location: %s\n", installLoc)
 
-				// Check if marketplace is cloned
-				indexPath := installLoc + "/.claude-plugin/marketplace.json"
+				source := marketplace.NewMarketSourceFromConfig(market)
+				indexPath := marketplace.MarketSourceIndexPath(source)
 				if _, err := os.Stat(indexPath); os.IsNotExist(err) {
 					fmt.Printf("    Status: Not cloned\n")
 					notClonedCount++

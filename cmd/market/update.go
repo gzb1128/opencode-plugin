@@ -72,30 +72,28 @@ func updateMarket(mgr *marketplace.Manager, configMgr *config.Manager, name stri
 	}
 
 	marketType, _ := market["source"].(string)
-	if marketType == string(marketplace.SourceTypeLocal) {
+	if isLocalMarketType(marketType) {
 		fmt.Printf("Skipping %s (local marketplace)\n", name)
 		return nil
 	}
 
-	// Get or create install location
-	installLoc, _ := market["installLocation"].(string)
-	if installLoc == "" {
-		// First time cloning, set the install location
-		paths := configMgr.GetPaths()
-		installLoc = paths.MarketsDir + "/" + name
-	}
-
 	fmt.Printf("Updating %s...\n", name)
 
-	// Clone or update the marketplace
-	mp, err := mgr.Add(name, getMarketURL(market))
+	url := getMarketURL(market)
+
+	mp, resultSource, err := mgr.Add(name, url)
 	if err != nil {
 		return err
 	}
 
-	// Update the install location in config
-	market["installLocation"] = installLoc
-	if err := configMgr.AddKnownMarket(name, market); err != nil {
+	installLoc := resultSource.InstallLocation()
+
+	marketCfg := marketplace.MarketSourceToConfig(resultSource)
+	marketCfg["installLocation"] = installLoc
+
+	preserveConfigFields(market, marketCfg)
+
+	if err := configMgr.AddKnownMarket(name, marketCfg); err != nil {
 		return fmt.Errorf("failed to update marketplace config: %w", err)
 	}
 
@@ -104,19 +102,24 @@ func updateMarket(mgr *marketplace.Manager, configMgr *config.Manager, name stri
 }
 
 func getMarketURL(market map[string]interface{}) string {
-	// Get URL from market source
-	source, ok := market["source"].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-
-	if repo, ok := source["repo"].(string); ok {
-		return repo
-	}
-	if url, ok := source["url"].(string); ok {
+	if url, ok := market["url"].(string); ok && url != "" {
 		return url
 	}
+	if repo, ok := market["repo"].(string); ok && repo != "" {
+		return repo
+	}
+	if path, ok := market["path"].(string); ok && path != "" {
+		return path
+	}
 	return ""
+}
+
+func preserveConfigFields(orig, cfg map[string]interface{}) {
+	for _, key := range []string{"ref", "sparsePaths", "headers"} {
+		if v, ok := orig[key]; ok && v != nil {
+			cfg[key] = v
+		}
+	}
 }
 
 var removeCmd = &cobra.Command{
@@ -170,7 +173,7 @@ Examples:
 		}
 
 		// Remove directory if not local
-		if marketType != string(marketplace.SourceTypeLocal) {
+		if !isLocalMarketType(marketType) {
 			paths := configMgr.GetPaths()
 			mgr := marketplace.NewManager(paths.MarketsDir)
 			if err := mgr.Remove(name); err != nil {
@@ -196,4 +199,10 @@ func init() {
 	removeCmd.Flags().BoolP("force", "f", false, "Skip confirmation")
 	Cmd.AddCommand(updateCmd)
 	Cmd.AddCommand(removeCmd)
+}
+
+func isLocalMarketType(marketType string) bool {
+	return marketType == string(marketplace.SourceTypeLocal) ||
+		marketType == string(marketplace.SourceTypeDirectory) ||
+		marketType == string(marketplace.SourceTypeFile)
 }
