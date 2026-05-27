@@ -1,5 +1,7 @@
 package marketplace
 
+import "encoding/json"
+
 type SourceType string
 
 const (
@@ -159,16 +161,29 @@ type Owner struct {
 }
 
 type Plugin struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Version     string      `json:"version,omitempty"`
-	Category    string      `json:"category,omitempty"`
-	Author      *Author     `json:"author,omitempty"`
-	Source      interface{} `json:"source"`
-	Homepage    string      `json:"homepage,omitempty"`
-	Keywords    []string    `json:"keywords,omitempty"`
-	Tags        []string    `json:"tags,omitempty"`
-	Strict      *bool       `json:"strict,omitempty"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description"`
+	Version         string          `json:"version,omitempty"`
+	Category        string          `json:"category,omitempty"`
+	Author          *Author         `json:"author,omitempty"`
+	Source          interface{}     `json:"source"`
+	Homepage        string          `json:"homepage,omitempty"`
+	Repository      string          `json:"repository,omitempty"`
+	License         string          `json:"license,omitempty"`
+	Keywords        []string        `json:"keywords,omitempty"`
+	Tags            []string        `json:"tags,omitempty"`
+	DependenciesRaw json.RawMessage `json:"dependencies,omitempty"`
+	Dependencies    []string        `json:"-"`
+	Skills          interface{}     `json:"skills,omitempty"`
+	Commands        interface{}     `json:"commands,omitempty"`
+	Agents          interface{}     `json:"agents,omitempty"`
+	MCPServersRaw   json.RawMessage `json:"mcpServers,omitempty"`
+	HooksRaw        json.RawMessage `json:"hooks,omitempty"`
+	OutputStylesRaw json.RawMessage `json:"outputStyles,omitempty"`
+	ChannelsRaw     json.RawMessage `json:"channels,omitempty"`
+	LSPServersRaw   json.RawMessage `json:"lspServers,omitempty"`
+	UserConfigRaw   json.RawMessage `json:"userConfig,omitempty"`
+	Strict          *bool           `json:"strict,omitempty"`
 }
 
 type Author struct {

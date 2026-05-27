@@ -147,3 +147,61 @@ func TestSafeMarketplaceCachePath(t *testing.T) {
 		}
 	})
 }
+
+func TestSafePluginCachePath(t *testing.T) {
+	t.Run("basic plugin@market", func(t *testing.T) {
+		base := t.TempDir()
+		got, err := SafePluginCachePath(base, "my-plugin@my-market", "1.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(base, "my-market", "my-plugin", "1.0.0")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("scoped plugin@market splits at last @", func(t *testing.T) {
+		base := t.TempDir()
+		got, err := SafePluginCachePath(base, "@scope/plugin@my-market", "2.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(base, "my-market", "@scope-plugin", "2.0.0")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("empty plugin ID rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafePluginCachePath(base, "", "1.0.0")
+		if err == nil {
+			t.Fatal("expected error for empty plugin ID")
+		}
+	})
+
+	t.Run("empty version rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafePluginCachePath(base, "plugin@market", "")
+		if err == nil {
+			t.Fatal("expected error for empty version")
+		}
+	})
+
+	t.Run("dot dot version rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafePluginCachePath(base, "plugin@market", "..")
+		if err == nil {
+			t.Fatal("expected error for '..' version")
+		}
+	})
+
+	t.Run("plugin only without market", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafePluginCachePath(base, "my-plugin", "1.0.0")
+		if err == nil {
+			t.Fatal("expected error for plugin without marketplace")
+		}
+	})
+}

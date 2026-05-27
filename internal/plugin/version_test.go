@@ -101,6 +101,40 @@ func TestGetPluginSourcePath(t *testing.T) {
 	})
 }
 
+func TestGetPluginSourcePathWithCtx_PluginRoot(t *testing.T) {
+	resolver := NewVersionResolver()
+	marketPath := filepath.Join(t.TempDir(), "markets", "test")
+	os.MkdirAll(filepath.Join(marketPath, "packages", "tool"), 0755)
+
+	p := marketplace.Plugin{Source: &marketplace.LocalSource{Path: "./tool"}}
+	ctx := PluginResolutionContext{MarketPath: marketPath, PluginRoot: "packages"}
+	path, err := resolver.GetPluginSourcePathWithCtx(&p, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := filepath.Join(marketPath, "packages", "tool")
+	evalExpected, _ := filepath.EvalSymlinks(expected)
+	if evalExpected != "" {
+		expected = evalExpected
+	}
+	if path != expected {
+		t.Errorf("expected %s, got %s", expected, path)
+	}
+}
+
+func TestGetPluginSourcePathWithCtx_TraversalCheck(t *testing.T) {
+	resolver := NewVersionResolver()
+	marketPath := t.TempDir()
+
+	p := marketplace.Plugin{Source: &marketplace.LocalSource{Path: "../../etc/passwd"}}
+	ctx := PluginResolutionContext{MarketPath: marketPath, PluginRoot: ""}
+	_, err := resolver.GetPluginSourcePathWithCtx(&p, ctx)
+	if err == nil {
+		t.Fatal("expected error for path traversal")
+	}
+}
+
 func TestCloneRemotePlugin_UnsupportedTypes(t *testing.T) {
 	resolver := NewVersionResolver()
 	cachePath := filepath.Join(t.TempDir(), "cache")

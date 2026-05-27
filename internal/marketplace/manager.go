@@ -12,6 +12,13 @@ import (
 	"github.com/opencode/plugin-cli/internal/pathutil"
 )
 
+type ResolvedPlugin struct {
+	Plugin      *Plugin
+	Market      MarketSource
+	MarketName  string
+	Marketplace *Marketplace
+}
+
 type Manager struct {
 	marketsDir string
 	gitClient  *GitClient
@@ -204,6 +211,61 @@ func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, market
 	}
 
 	return nil, nil, "", fmt.Errorf("plugin %s not found in any marketplace", pluginName)
+}
+
+func (m *Manager) ResolvePlugin(markets map[string]MarketSource, pluginName, marketName string) (*ResolvedPlugin, error) {
+	if marketName != "" {
+		market, ok := markets[marketName]
+		if !ok {
+			return nil, fmt.Errorf("marketplace %s not found", marketName)
+		}
+
+		indexPath, err := MarketSourceIndexPath(market)
+		if err != nil {
+			return nil, err
+		}
+		marketplace, err := ParseMarketplaceIndex(indexPath)
+		if err != nil {
+			return nil, err
+		}
+
+		for i := range marketplace.Plugins {
+			if marketplace.Plugins[i].Name == pluginName {
+				return &ResolvedPlugin{
+					Plugin:      &marketplace.Plugins[i],
+					Market:      market,
+					MarketName:  marketName,
+					Marketplace: marketplace,
+				}, nil
+			}
+		}
+
+		return nil, fmt.Errorf("plugin %s not found in marketplace %s", pluginName, marketName)
+	}
+
+	for mName, market := range markets {
+		indexPath, err := MarketSourceIndexPath(market)
+		if err != nil {
+			continue
+		}
+		marketplace, err := ParseMarketplaceIndex(indexPath)
+		if err != nil {
+			continue
+		}
+
+		for i := range marketplace.Plugins {
+			if marketplace.Plugins[i].Name == pluginName {
+				return &ResolvedPlugin{
+					Plugin:      &marketplace.Plugins[i],
+					Market:      market,
+					MarketName:  mName,
+					Marketplace: marketplace,
+				}, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("plugin %s not found in any marketplace", pluginName)
 }
 
 func (m *Manager) Remove(name string) error {

@@ -9,8 +9,10 @@ import (
 )
 
 var (
-	nonASCII = regexp.MustCompile(`[^\x20-\x7E]`)
-	shaRegex = regexp.MustCompile(`^[a-f0-9]{7,40}$`)
+	nonASCII          = regexp.MustCompile(`[^\x20-\x7E]`)
+	shaRegex          = regexp.MustCompile(`^[a-f0-9]{7,40}$`)
+	depSegmentRegex   = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	versionConstraint = regexp.MustCompile(`^[\^~>=<*vV0-9].*$`)
 )
 
 func ParseMarketplaceIndex(path string) (*Marketplace, error) {
@@ -34,6 +36,12 @@ func ParseMarketplaceIndex(path string) (*Marketplace, error) {
 			return nil, fmt.Errorf("failed to parse source for plugin %s: %w", plugin.Name, err)
 		}
 		marketplace.Plugins[i].Source = src
+
+		deps, err := parseDependencies(plugin.DependenciesRaw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse dependencies for plugin %s: %w", plugin.Name, err)
+		}
+		marketplace.Plugins[i].Dependencies = deps
 	}
 
 	return &marketplace, nil
@@ -202,4 +210,104 @@ func validateSHA(sha string) error {
 func optionalString(v map[string]interface{}, key string) string {
 	s, _ := v[key].(string)
 	return s
+}
+
+func parseDependencies(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	var items []interface{}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("dependencies must be an array: %w", err)
+	}
+
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		ref, err := parseDependencyRef(item)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ref)
+	}
+	return result, nil
+}
+
+func parseDependencyRef(raw interface{}) (string, error) {
+	switch v := raw.(type) {
+	case string:
+		return parseDependencyString(v)
+	case map[string]interface{}:
+		name, _ := v["name"].(string)
+		if name == "" {
+			return "", fmt.Errorf("object-form dependency must have a 'name' field")
+		}
+		if err := validateDepSegment(name); err != nil {
+			return "", fmt.Errorf("invalid dependency name %q: %w", name, err)
+		}
+		market, _ := v["marketplace"].(string)
+		if market != "" {
+			if err := validateDepSegment(market); err != nil {
+				return "", fmt.Errorf("invalid dependency marketplace %q: %w", market, err)
+			}
+			return name + "@" + market, nil
+		}
+		return name, nil
+	default:
+		return "", fmt.Errorf("dependency must be a string or object, got %T", raw)
+	}
+}
+
+func parseDependencyString(s string) (string, error) {
+	parts := strings.Split(s, "@")
+	switch len(parts) {
+	case 1:
+		if err := validateDepSegment(parts[0]); err != nil {
+			return "", err
+		}
+		return parts[0], nil
+	case 2:
+		name := parts[0]
+		if err := validateDepSegment(name); err != nil {
+			return "", err
+		}
+		rest := parts[1]
+		if versionConstraint.MatchString(rest) {
+			return name, nil
+		}
+		subParts := strings.Split(rest, "@")
+		market := subParts[0]
+		if err := validateDepSegment(market); err != nil {
+			return "", err
+		}
+		return name + "@" + market, nil
+	case 3:
+		name := parts[0]
+		if err := validateDepSegment(name); err != nil {
+			return "", err
+		}
+		market := parts[1]
+		if err := validateDepSegment(market); err != nil {
+			return "", err
+		}
+		return name + "@" + market, nil
+	default:
+		return "", fmt.Errorf("dependency reference has too many '@' segments: %q", s)
+	}
+}
+
+func validateDepSegment(s string) error {
+	if s == "" {
+		return fmt.Errorf("dependency segment must not be empty")
+	}
+	if strings.Contains(s, "/") || strings.Contains(s, "\\") {
+		return fmt.Errorf("dependency segment must not contain '/' or '\\': %q", s)
+	}
+	if strings.Contains(s, "..") {
+		return fmt.Errorf("dependency segment must not contain '..': %q", s)
+	}
+	if !depSegmentRegex.MatchString(s) {
+		return fmt.Errorf("dependency segment contains invalid characters: %q", s)
+	}
+	return nil
 }

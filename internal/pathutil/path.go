@@ -74,6 +74,44 @@ func ResolvePathWithinBase(basePath, relativePath string) (string, error) {
 	return resolved, nil
 }
 
+func SafePluginCachePath(cacheDir, pluginID, version string) (string, error) {
+	var pluginName, marketName string
+	lastAt := strings.LastIndex(pluginID, "@")
+	if lastAt > 0 {
+		pluginName = pluginID[:lastAt]
+		marketName = pluginID[lastAt+1:]
+	} else {
+		pluginName = pluginID
+	}
+
+	sanitizedPlugin := sanitizeAlias(pluginName)
+	sanitizedMarket := sanitizeAlias(marketName)
+	sanitizedVersion := sanitizeAlias(version)
+
+	if sanitizedPlugin == "" || sanitizedPlugin == "." || sanitizedPlugin == ".." {
+		return "", fmt.Errorf("invalid plugin name after sanitization: %q", pluginName)
+	}
+	if sanitizedMarket == "" || sanitizedMarket == "." || sanitizedMarket == ".." {
+		return "", fmt.Errorf("invalid marketplace name after sanitization: %q", marketName)
+	}
+	if sanitizedVersion == "" || sanitizedVersion == "." || sanitizedVersion == ".." {
+		return "", fmt.Errorf("invalid version after sanitization: %q", version)
+	}
+
+	relativePath := filepath.Join(sanitizedMarket, sanitizedPlugin, sanitizedVersion)
+	resolved, err := ResolvePathWithinBase(cacheDir, relativePath)
+	if err != nil {
+		return "", fmt.Errorf("plugin cache path escapes cache directory: %w", err)
+	}
+
+	absCacheDir, _ := filepath.Abs(filepath.Clean(cacheDir))
+	if resolved == absCacheDir {
+		return "", fmt.Errorf("plugin cache path must be a child of cache directory, not the directory itself")
+	}
+
+	return resolved, nil
+}
+
 func isWithinBase(path, base string) bool {
 	return strings.HasPrefix(path, base+string(filepath.Separator)) || path == base
 }

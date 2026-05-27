@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,14 @@ import (
 	"github.com/opencode/plugin-cli/internal/marketplace"
 	"github.com/opencode/plugin-cli/internal/mcp"
 	"github.com/opencode/plugin-cli/internal/opencode"
+	"github.com/opencode/plugin-cli/internal/pathutil"
 )
+
+type MaterializedPlugin struct {
+	Path         string
+	Version      string
+	ManifestPath string
+}
 
 type Installer struct {
 	configMgr  *config.Manager
@@ -307,6 +315,153 @@ func (i *Installer) copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0644)
+}
+
+func (i *Installer) materializePlugin(resolved *marketplace.ResolvedPlugin, opts InstallOptions) (*MaterializedPlugin, error) {
+	marketPath := resolved.Market.InstallLocation()
+	plugin := resolved.Plugin
+
+	var pluginRoot string
+	if resolved.Marketplace != nil && resolved.Marketplace.Metadata != nil {
+		pluginRoot = resolved.Marketplace.Metadata.PluginRoot
+	}
+
+	ctx := PluginResolutionContext{MarketPath: marketPath, PluginRoot: pluginRoot}
+
+	isRemote := i.resolver.IsRemoteSource(plugin)
+	var sourcePath string
+	var version string
+
+	if isRemote {
+		var err error
+		version, err = i.resolveRemoteVersion(plugin, opts.Version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve version: %w", err)
+		}
+	} else {
+		var err error
+		sourcePath, err = i.resolver.GetPluginSourcePathWithCtx(plugin, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get plugin source path: %w", err)
+		}
+
+		if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
+			return nil, fmt.Errorf("plugin directory not found: %s", sourcePath)
+		}
+
+		version, err = i.resolver.Resolve(sourcePath, opts.Version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve version: %w", err)
+		}
+
+		if version == "latest" && plugin.Version != "" {
+			version = plugin.Version
+		}
+	}
+
+	pluginID := fmt.Sprintf("%s@%s", plugin.Name, opts.MarketName)
+	cachePath, err := pathutil.SafePluginCachePath(i.configMgr.GetPaths().CacheDir, pluginID, version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute cache path: %w", err)
+	}
+
+	manifestPath := filepath.Join(cachePath, ".claude-plugin", "plugin.json")
+
+	if isRemote {
+		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+			fmt.Printf("  Cloning plugin from remote repository...\n")
+			if err := i.resolver.CloneRemotePlugin(plugin, cachePath); err != nil {
+				return nil, fmt.Errorf("failed to clone plugin: %w", err)
+			}
+		}
+	} else {
+		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+			if err := i.copyPluginToCache(sourcePath, cachePath); err != nil {
+				return nil, fmt.Errorf("failed to copy plugin to cache: %w", err)
+			}
+		}
+	}
+
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		if err := i.generateFallbackManifest(plugin, cachePath); err != nil {
+			fmt.Printf("⚠️  Warning: Failed to generate fallback manifest: %v\n", err)
+		}
+	}
+
+	return &MaterializedPlugin{
+		Path:         cachePath,
+		Version:      version,
+		ManifestPath: manifestPath,
+	}, nil
+}
+
+func (i *Installer) generateFallbackManifest(plugin *marketplace.Plugin, cachePath string) error {
+	manifestDir := filepath.Join(cachePath, ".claude-plugin")
+	if err := os.MkdirAll(manifestDir, 0755); err != nil {
+		return fmt.Errorf("failed to create manifest directory: %w", err)
+	}
+
+	manifest := map[string]interface{}{
+		"name":        plugin.Name,
+		"description": plugin.Description,
+	}
+	if plugin.Version != "" {
+		manifest["version"] = plugin.Version
+	}
+	if plugin.Author != nil {
+		manifest["author"] = plugin.Author
+	}
+	if plugin.Homepage != "" {
+		manifest["homepage"] = plugin.Homepage
+	}
+	if plugin.Repository != "" {
+		manifest["repository"] = plugin.Repository
+	}
+	if plugin.License != "" {
+		manifest["license"] = plugin.License
+	}
+	if len(plugin.Keywords) > 0 {
+		manifest["keywords"] = plugin.Keywords
+	}
+	if len(plugin.Dependencies) > 0 {
+		manifest["dependencies"] = plugin.Dependencies
+	}
+	if plugin.Skills != nil {
+		manifest["skills"] = plugin.Skills
+	}
+	if plugin.Commands != nil {
+		manifest["commands"] = plugin.Commands
+	}
+	if plugin.Agents != nil {
+		manifest["agents"] = plugin.Agents
+	}
+	if len(plugin.MCPServersRaw) > 0 {
+		manifest["mcpServers"] = json.RawMessage(plugin.MCPServersRaw)
+	}
+
+	deferredFields := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{"hooks", plugin.HooksRaw},
+		{"outputStyles", plugin.OutputStylesRaw},
+		{"channels", plugin.ChannelsRaw},
+		{"lspServers", plugin.LSPServersRaw},
+		{"userConfig", plugin.UserConfigRaw},
+	}
+	for _, df := range deferredFields {
+		if len(df.raw) > 0 {
+			fmt.Printf("⚠️  Warning: field %q is deferred and will be skipped in fallback manifest for plugin %s\n", df.name, plugin.Name)
+		}
+	}
+
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	manifestPath := filepath.Join(manifestDir, "plugin.json")
+	return os.WriteFile(manifestPath, append(data, '\n'), 0644)
 }
 
 func (i *Installer) Remove(pluginName, marketName string) error {

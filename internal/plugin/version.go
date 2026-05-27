@@ -10,7 +10,13 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/opencode/plugin-cli/internal/marketplace"
+	"github.com/opencode/plugin-cli/internal/pathutil"
 )
+
+type PluginResolutionContext struct {
+	MarketPath string
+	PluginRoot string
+}
 
 type VersionResolver struct {
 	gitClient *GitClient
@@ -78,6 +84,11 @@ func (g *GitClient) GetCommitSHA(path string) (string, error) {
 }
 
 func (v *VersionResolver) GetPluginSourcePath(plugin *marketplace.Plugin, marketPath string) (string, error) {
+	ctx := PluginResolutionContext{MarketPath: marketPath, PluginRoot: ""}
+	return v.GetPluginSourcePathWithCtx(plugin, ctx)
+}
+
+func (v *VersionResolver) GetPluginSourcePathWithCtx(plugin *marketplace.Plugin, ctx PluginResolutionContext) (string, error) {
 	src, ok := plugin.Source.(marketplace.PluginSource)
 	if !ok {
 		return "", fmt.Errorf("invalid plugin source format")
@@ -85,7 +96,24 @@ func (v *VersionResolver) GetPluginSourcePath(plugin *marketplace.Plugin, market
 
 	switch s := src.(type) {
 	case *marketplace.LocalSource:
-		return filepath.Join(marketPath, s.Path), nil
+		base := ctx.MarketPath
+		if ctx.PluginRoot != "" {
+			base = filepath.Join(base, ctx.PluginRoot)
+		}
+		resolved := filepath.Join(base, s.Path)
+		if ctx.MarketPath != "" {
+			validated, err := pathutil.ResolvePathWithinBase(ctx.MarketPath, filepath.Join(func() string {
+				if ctx.PluginRoot != "" {
+					return ctx.PluginRoot + string(filepath.Separator) + s.Path
+				}
+				return s.Path
+			}()))
+			if err != nil {
+				return "", fmt.Errorf("plugin source path escapes marketplace root: %w", err)
+			}
+			return validated, nil
+		}
+		return resolved, nil
 	default:
 		return "", fmt.Errorf("unsupported plugin source type: %s (plugin may need to be cloned first)", src.SourceType())
 	}

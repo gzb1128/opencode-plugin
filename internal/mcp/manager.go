@@ -368,3 +368,60 @@ func (m *Manager) substitutePluginRoot(server MCPServer, pluginPath string) MCPS
 func (m *Manager) substitutePath(str, pluginPath string) string {
 	return m.substituteString(str, pluginPath, "", "")
 }
+
+func NormalizeMCPServers(pluginPath string, raw json.RawMessage) (map[string]MCPServer, []string, error) {
+	if len(raw) == 0 {
+		return nil, nil, nil
+	}
+
+	warnings := []string{}
+	servers := make(map[string]MCPServer)
+
+	var direct map[string]MCPServer
+	if err := json.Unmarshal(raw, &direct); err == nil {
+		for name, server := range direct {
+			servers[name] = server
+		}
+		return servers, warnings, nil
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err == nil {
+		for _, item := range items {
+			var entry map[string]MCPServer
+			if err := json.Unmarshal(item, &entry); err == nil {
+				for name, server := range entry {
+					servers[name] = server
+				}
+				continue
+			}
+
+			var pathStr string
+			if err := json.Unmarshal(item, &pathStr); err == nil {
+				absPath := pathStr
+				if !filepath.IsAbs(absPath) {
+					absPath = filepath.Join(pluginPath, absPath)
+				}
+				data, err := os.ReadFile(absPath)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("failed to read MCP config file %s: %v", pathStr, err))
+					continue
+				}
+				var fileServers map[string]MCPServer
+				if err := json.Unmarshal(data, &fileServers); err != nil {
+					warnings = append(warnings, fmt.Sprintf("failed to parse MCP config file %s: %v", pathStr, err))
+					continue
+				}
+				for name, server := range fileServers {
+					servers[name] = server
+				}
+				continue
+			}
+
+			warnings = append(warnings, fmt.Sprintf("unsupported MCP config entry: %s", string(item)))
+		}
+		return servers, warnings, nil
+	}
+
+	return nil, warnings, fmt.Errorf("mcpServers must be an object or array")
+}
