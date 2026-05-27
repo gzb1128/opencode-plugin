@@ -39,7 +39,11 @@ func (m *Manager) AddSource(name string, source MarketSource) (*Marketplace, Mar
 	switch s := source.(type) {
 	case *GitHubMarketSource, *GitMarketSource:
 		cloneURL := GetMarketSourceURL(source)
-		if err := m.gitClient.CloneOrPull(cloneURL, marketDir); err != nil {
+		opts := CloneOptions{
+			Ref:         GetMarketSourceRef(source),
+			SparsePaths: GetMarketSourceSparsePaths(source),
+		}
+		if err := m.gitClient.CloneOrPullWithOptions(cloneURL, marketDir, opts); err != nil {
 			return nil, nil, fmt.Errorf("failed to clone/pull repository: %w", err)
 		}
 
@@ -273,6 +277,10 @@ func MarketSourceIndexPath(source MarketSource) (string, error) {
 		}
 		return "", fmt.Errorf("URL market source has no install location")
 	default:
+		customPath := GetMarketSourceManifestPath(source)
+		if customPath != "" {
+			return pathutil.ResolvePathWithinBase(source.InstallLocation(), customPath)
+		}
 		return pathutil.ResolvePathWithinBase(source.InstallLocation(), ".claude-plugin"+string(filepath.Separator)+"marketplace.json")
 	}
 }

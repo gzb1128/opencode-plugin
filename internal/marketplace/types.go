@@ -313,6 +313,39 @@ func GetMarketSourceURL(ms MarketSource) string {
 	}
 }
 
+func GetMarketSourceManifestPath(ms MarketSource) string {
+	switch s := ms.(type) {
+	case *GitHubMarketSource:
+		return s.Path
+	case *GitMarketSource:
+		return s.Path
+	default:
+		return ""
+	}
+}
+
+func GetMarketSourceRef(ms MarketSource) string {
+	switch s := ms.(type) {
+	case *GitHubMarketSource:
+		return s.Ref
+	case *GitMarketSource:
+		return s.Ref
+	default:
+		return ""
+	}
+}
+
+func GetMarketSourceSparsePaths(ms MarketSource) []string {
+	switch s := ms.(type) {
+	case *GitHubMarketSource:
+		return s.SparsePaths
+	case *GitMarketSource:
+		return s.SparsePaths
+	default:
+		return nil
+	}
+}
+
 func configStringSlice(raw interface{}) []string {
 	switch v := raw.(type) {
 	case []string:

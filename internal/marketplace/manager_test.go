@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 func TestManagerAddFileMarketSource(t *testing.T) {
@@ -268,4 +271,378 @@ func writeTestMarketplaceIndex(t *testing.T, path string) {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatalf("failed to write marketplace index: %v", err)
 	}
+}
+
+func TestMarketSourceIndexPath_CustomPath(t *testing.T) {
+	t.Run("custom path resolves within install location", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		source := &GitMarketSource{
+			URL:  "/fake/repo.git",
+			Path: "catalog/.claude-plugin/marketplace.json",
+		}
+		source.SetInstallLocation(tmpDir)
+
+		got, err := MarketSourceIndexPath(source)
+		if err != nil {
+			t.Fatalf("MarketSourceIndexPath() error = %v", err)
+		}
+
+		want := filepath.Join(tmpDir, "catalog", ".claude-plugin", "marketplace.json")
+		if got != want {
+			t.Errorf("MarketSourceIndexPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("path traversal returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		source := &GitMarketSource{
+			URL:  "/fake/repo.git",
+			Path: "../outside/marketplace.json",
+		}
+		source.SetInstallLocation(tmpDir)
+
+		_, err := MarketSourceIndexPath(source)
+		if err == nil {
+			t.Fatal("expected error for path traversal, got nil")
+		}
+	})
+
+	t.Run("absolute path returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		source := &GitMarketSource{
+			URL:  "/fake/repo.git",
+			Path: "/tmp/marketplace.json",
+		}
+		source.SetInstallLocation(tmpDir)
+
+		_, err := MarketSourceIndexPath(source)
+		if err == nil {
+			t.Fatal("expected error for absolute path, got nil")
+		}
+	})
+
+	t.Run("symlink escape returns error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		outsideDir := t.TempDir()
+
+		subDir := filepath.Join(tmpDir, "sub")
+		if err := os.MkdirAll(subDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		linkPath := filepath.Join(subDir, "escape")
+		if err := os.Symlink(outsideDir, linkPath); err != nil {
+			t.Fatal(err)
+		}
+
+		source := &GitMarketSource{
+			URL:  "/fake/repo.git",
+			Path: "sub/escape/marketplace.json",
+		}
+		source.SetInstallLocation(tmpDir)
+
+		_, err := MarketSourceIndexPath(source)
+		if err == nil {
+			t.Fatal("expected error for symlink escape, got nil")
+		}
+	})
+
+	t.Run("empty path uses default", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		source := &GitMarketSource{
+			URL: "/fake/repo.git",
+		}
+		source.SetInstallLocation(tmpDir)
+
+		got, err := MarketSourceIndexPath(source)
+		if err != nil {
+			t.Fatalf("MarketSourceIndexPath() error = %v", err)
+		}
+
+		want := filepath.Join(tmpDir, ".claude-plugin", "marketplace.json")
+		if got != want {
+			t.Errorf("MarketSourceIndexPath() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("GitHub source with custom path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		source := &GitHubMarketSource{
+			Repo: "owner/repo",
+			Path: "custom/marketplace.json",
+		}
+		source.SetInstallLocation(tmpDir)
+
+		got, err := MarketSourceIndexPath(source)
+		if err != nil {
+			t.Fatalf("MarketSourceIndexPath() error = %v", err)
+		}
+
+		want := filepath.Join(tmpDir, "custom", "marketplace.json")
+		if got != want {
+			t.Errorf("MarketSourceIndexPath() = %q, want %q", got, want)
+		}
+	})
+}
+
+func initTestGitRepo(t *testing.T, dir string, branchName, marketplaceName string) {
+	t.Helper()
+
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("failed to init repo: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	indexPath := filepath.Join(dir, ".claude-plugin", "marketplace.json")
+	if err := os.MkdirAll(filepath.Dir(indexPath), 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+
+	data := fmt.Sprintf(`{"name":"%s","plugins":[]}`, marketplaceName)
+	if err := os.WriteFile(indexPath, []byte(data), 0644); err != nil {
+		t.Fatalf("failed to write marketplace: %v", err)
+	}
+
+	_, err = wt.Add(".")
+	if err != nil {
+		t.Fatalf("failed to add files: %v", err)
+	}
+	_, err = wt.Commit("initial commit", &git.CommitOptions{})
+	if err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+
+	if branchName != "" {
+		headRef, err := repo.Head()
+		if err != nil {
+			t.Fatalf("failed to get HEAD: %v", err)
+		}
+		defaultBranch := headRef.Name().Short()
+		if defaultBranch != branchName {
+			ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/"+branchName), headRef.Hash())
+			if err := repo.Storer.SetReference(ref); err != nil {
+				t.Fatalf("failed to create branch %s: %v", branchName, err)
+			}
+			if err := wt.Checkout(&git.CheckoutOptions{
+				Branch: plumbing.ReferenceName("refs/heads/" + branchName),
+			}); err != nil {
+				t.Fatalf("failed to checkout branch %s: %v", branchName, err)
+			}
+		}
+	}
+}
+
+func TestManagerAddSource_GitWithRef(t *testing.T) {
+	repoDir := t.TempDir()
+	initTestGitRepo(t, repoDir, "", "main-market")
+
+	repo, err := git.PlainOpen(repoDir)
+	if err != nil {
+		t.Fatalf("failed to open repo: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	headRef, err := repo.Head()
+	if err != nil {
+		t.Fatalf("failed to get HEAD: %v", err)
+	}
+	featureRef := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/feature"), headRef.Hash())
+	if err := repo.Storer.SetReference(featureRef); err != nil {
+		t.Fatalf("failed to create feature branch: %v", err)
+	}
+	if err := wt.Checkout(&git.CheckoutOptions{
+		Branch: plumbing.ReferenceName("refs/heads/feature"),
+	}); err != nil {
+		t.Fatalf("failed to checkout feature: %v", err)
+	}
+
+	featureIndexPath := filepath.Join(repoDir, ".claude-plugin", "marketplace.json")
+	featureData := `{"name":"feature-market","plugins":[]}`
+	if err := os.WriteFile(featureIndexPath, []byte(featureData), 0644); err != nil {
+		t.Fatalf("failed to write feature marketplace: %v", err)
+	}
+
+	_, err = wt.Add(".")
+	if err != nil {
+		t.Fatalf("failed to add: %v", err)
+	}
+	_, err = wt.Commit("feature commit", &git.CommitOptions{})
+	if err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+
+	marketsDir := t.TempDir()
+	mgr := NewManager(marketsDir)
+
+	source := &GitMarketSource{
+		URL: repoDir,
+		Ref: "feature",
+	}
+
+	mp, _, err := mgr.AddSource("feature-test", source)
+	if err != nil {
+		t.Fatalf("AddSource() error = %v", err)
+	}
+
+	if mp.Name != "feature-market" {
+		t.Errorf("marketplace name = %q, want %q", mp.Name, "feature-market")
+	}
+}
+
+func TestManagerAddSource_GitWithCustomPath(t *testing.T) {
+	repoDir := t.TempDir()
+	initTestGitRepo(t, repoDir, "main", "path-market")
+
+	customIndexPath := filepath.Join(repoDir, "catalog", ".claude-plugin", "marketplace.json")
+	if err := os.MkdirAll(filepath.Dir(customIndexPath), 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	customData := `{"name":"custom-path-market","plugins":[]}`
+	if err := os.WriteFile(customIndexPath, []byte(customData), 0644); err != nil {
+		t.Fatalf("failed to write custom marketplace: %v", err)
+	}
+
+	repo, err := git.PlainOpen(repoDir)
+	if err != nil {
+		t.Fatalf("failed to open repo: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+	_, err = wt.Add(".")
+	if err != nil {
+		t.Fatalf("failed to add: %v", err)
+	}
+	_, err = wt.Commit("add custom path", &git.CommitOptions{})
+	if err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+
+	marketsDir := t.TempDir()
+	mgr := NewManager(marketsDir)
+
+	source := &GitMarketSource{
+		URL:  repoDir,
+		Path: "catalog/.claude-plugin/marketplace.json",
+	}
+
+	mp, resultSource, err := mgr.AddSource("custom-path-test", source)
+	if err != nil {
+		t.Fatalf("AddSource() error = %v", err)
+	}
+
+	if mp.Name != "custom-path-market" {
+		t.Errorf("marketplace name = %q, want %q", mp.Name, "custom-path-market")
+	}
+
+	indexPath, err := MarketSourceIndexPath(resultSource)
+	if err != nil {
+		t.Fatalf("MarketSourceIndexPath() error = %v", err)
+	}
+
+	expected := filepath.Join(resultSource.InstallLocation(), "catalog", ".claude-plugin", "marketplace.json")
+	resolvedExpected, _ := filepath.EvalSymlinks(filepath.Dir(expected))
+	if resolvedExpected != "" {
+		expected = filepath.Join(resolvedExpected, filepath.Base(expected))
+	}
+	if indexPath != expected {
+		t.Errorf("index path = %q, want %q", indexPath, expected)
+	}
+}
+
+func TestManagerAddSource_SparsePathsNoError(t *testing.T) {
+	repoDir := t.TempDir()
+	initTestGitRepo(t, repoDir, "main", "sparse-market")
+
+	marketsDir := t.TempDir()
+	mgr := NewManager(marketsDir)
+
+	source := &GitMarketSource{
+		URL:         repoDir,
+		SparsePaths: []string{".claude-plugin", "plugins"},
+	}
+
+	mp, _, err := mgr.AddSource("sparse-test", source)
+	if err != nil {
+		t.Fatalf("AddSource() with sparsePaths error = %v", err)
+	}
+
+	if mp.Name != "sparse-market" {
+		t.Errorf("marketplace name = %q, want %q", mp.Name, "sparse-market")
+	}
+}
+
+func TestGetMarketSourceManifestPath(t *testing.T) {
+	t.Run("GitHub with path", func(t *testing.T) {
+		src := &GitHubMarketSource{Path: "custom/marketplace.json"}
+		if got := GetMarketSourceManifestPath(src); got != "custom/marketplace.json" {
+			t.Errorf("got %q, want %q", got, "custom/marketplace.json")
+		}
+	})
+	t.Run("Git with path", func(t *testing.T) {
+		src := &GitMarketSource{Path: "other/marketplace.json"}
+		if got := GetMarketSourceManifestPath(src); got != "other/marketplace.json" {
+			t.Errorf("got %q, want %q", got, "other/marketplace.json")
+		}
+	})
+	t.Run("Git without path", func(t *testing.T) {
+		src := &GitMarketSource{}
+		if got := GetMarketSourceManifestPath(src); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+	t.Run("other source types return empty", func(t *testing.T) {
+		src := &URLMarketSource{}
+		if got := GetMarketSourceManifestPath(src); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}
+
+func TestGetMarketSourceRef(t *testing.T) {
+	t.Run("GitHub with ref", func(t *testing.T) {
+		src := &GitHubMarketSource{Ref: "main"}
+		if got := GetMarketSourceRef(src); got != "main" {
+			t.Errorf("got %q, want %q", got, "main")
+		}
+	})
+	t.Run("Git with ref", func(t *testing.T) {
+		src := &GitMarketSource{Ref: "feature"}
+		if got := GetMarketSourceRef(src); got != "feature" {
+			t.Errorf("got %q, want %q", got, "feature")
+		}
+	})
+	t.Run("Git without ref", func(t *testing.T) {
+		src := &GitMarketSource{}
+		if got := GetMarketSourceRef(src); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+}
+
+func TestGetMarketSourceSparsePaths(t *testing.T) {
+	t.Run("Git with sparsePaths", func(t *testing.T) {
+		src := &GitMarketSource{SparsePaths: []string{"a", "b"}}
+		got := GetMarketSourceSparsePaths(src)
+		if len(got) != 2 || got[0] != "a" || got[1] != "b" {
+			t.Errorf("got %v, want [a b]", got)
+		}
+	})
+	t.Run("Git without sparsePaths", func(t *testing.T) {
+		src := &GitMarketSource{}
+		got := GetMarketSourceSparsePaths(src)
+		if got != nil {
+			t.Errorf("got %v, want nil", got)
+		}
+	})
 }
