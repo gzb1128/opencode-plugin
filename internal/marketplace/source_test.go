@@ -3,6 +3,7 @@ package marketplace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -11,7 +12,6 @@ func TestParseMarketplaceSource(t *testing.T) {
 		name     string
 		url      string
 		wantType string
-		setup    func() string // returns cleanup path
 	}{
 		{
 			name:     "GitHub shorthand format",
@@ -21,12 +21,12 @@ func TestParseMarketplaceSource(t *testing.T) {
 		{
 			name:     "GitHub SSH format",
 			url:      "git@github.com:opencode/plugins-official.git",
-			wantType: "github",
+			wantType: "git",
 		},
 		{
-			name:     "GitHub HTTPS URL (classified as github)",
+			name:     "GitHub HTTPS URL (classified as git)",
 			url:      "https://github.com/opencode/plugins-official.git",
-			wantType: "github",
+			wantType: "git",
 		},
 		{
 			name:     "Git HTTPS URL (non-GitHub)",
@@ -57,16 +57,22 @@ func TestParseMarketplaceSource(t *testing.T) {
 		})
 	}
 
-	t.Run("local directory path", func(t *testing.T) {
-		tmpDir := filepath.Join(t.TempDir(), "test-market")
-		os.MkdirAll(tmpDir, 0755)
+	t.Run("home-relative path", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		companyDir := filepath.Join(fakeHome, "marketplaces", "company")
+		os.MkdirAll(companyDir, 0755)
+		t.Setenv("HOME", fakeHome)
 
-		result, err := ParseMarketplaceSource(tmpDir)
+		result, err := ParseMarketplaceSource("~/marketplaces/company")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if result.SourceType() != "directory" {
 			t.Errorf("SourceType() = %v, want directory", result.SourceType())
+		}
+		s := result.(*DirectoryMarketSource)
+		if s.Path != companyDir {
+			t.Errorf("Path = %v, want %v", s.Path, companyDir)
 		}
 	})
 
@@ -118,15 +124,12 @@ func TestParseMarketplaceSource_GitHubFields(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		src, ok := result.(*GitHubMarketSource)
+		src, ok := result.(*GitMarketSource)
 		if !ok {
-			t.Fatalf("expected *GitHubMarketSource, got %T", result)
+			t.Fatalf("expected *GitMarketSource, got %T", result)
 		}
-		if src.Repo != "opencode/plugins-official" {
-			t.Errorf("Repo = %v, want opencode/plugins-official", src.Repo)
-		}
-		if got := GetMarketSourceURL(src); got != "git@github.com:opencode/plugins-official.git" {
-			t.Errorf("GetMarketSourceURL() = %v, want original SSH URL", got)
+		if src.URL != "git@github.com:opencode/plugins-official.git" {
+			t.Errorf("URL = %v, want git@github.com:opencode/plugins-official.git", src.URL)
 		}
 	})
 
@@ -135,12 +138,12 @@ func TestParseMarketplaceSource_GitHubFields(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		src, ok := result.(*GitHubMarketSource)
+		src, ok := result.(*GitMarketSource)
 		if !ok {
-			t.Fatalf("expected *GitHubMarketSource, got %T", result)
+			t.Fatalf("expected *GitMarketSource, got %T", result)
 		}
-		if got := GetMarketSourceURL(src); got != "https://github.com/opencode/plugins-official.git" {
-			t.Errorf("GetMarketSourceURL() = %v, want original HTTPS URL", got)
+		if src.URL != "https://github.com/opencode/plugins-official.git" {
+			t.Errorf("URL = %v, want https://github.com/opencode/plugins-official.git", src.URL)
 		}
 	})
 }
@@ -407,4 +410,178 @@ func TestPluginSourceInterface(t *testing.T) {
 			var _ PluginSource = src
 		})
 	}
+}
+
+func TestParseMarketplaceSource_InputParity(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantType   string
+		setup      func()
+		assertFunc func(t *testing.T, src MarketSource)
+	}{
+		{
+			name:     "GitLab SSH deploy key",
+			input:    "deploy@gitlab.com:group/project.git",
+			wantType: "git",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitMarketSource)
+				if s.URL != "deploy@gitlab.com:group/project.git" {
+					t.Errorf("URL = %v, want deploy@gitlab.com:group/project.git", s.URL)
+				}
+			},
+		},
+		{
+			name:     "GitHub SSH with org prefix and ref",
+			input:    "org-123456@github.com:owner/repo.git#release",
+			wantType: "git",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitMarketSource)
+				if s.URL != "org-123456@github.com:owner/repo.git" {
+					t.Errorf("URL = %v, want org-123456@github.com:owner/repo.git", s.URL)
+				}
+				if s.Ref != "release" {
+					t.Errorf("Ref = %v, want release", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "GitHub shorthand with hash ref",
+			input:    "owner/repo#main",
+			wantType: "github",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitHubMarketSource)
+				if s.Repo != "owner/repo" {
+					t.Errorf("Repo = %v, want owner/repo", s.Repo)
+				}
+				if s.Ref != "main" {
+					t.Errorf("Ref = %v, want main", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "GitHub shorthand with at ref",
+			input:    "owner/repo@v1.0.0",
+			wantType: "github",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitHubMarketSource)
+				if s.Repo != "owner/repo" {
+					t.Errorf("Repo = %v, want owner/repo", s.Repo)
+				}
+				if s.Ref != "v1.0.0" {
+					t.Errorf("Ref = %v, want v1.0.0", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "GitHub HTTPS URL with hash ref",
+			input:    "https://github.com/owner/repo#main",
+			wantType: "git",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitMarketSource)
+				if s.URL != "https://github.com/owner/repo.git" {
+					t.Errorf("URL = %v, want https://github.com/owner/repo.git", s.URL)
+				}
+				if s.Ref != "main" {
+					t.Errorf("Ref = %v, want main", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "Azure DevOps HTTPS URL with hash ref",
+			input:    "https://dev.azure.com/org/proj/_git/repo#main",
+			wantType: "git",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitMarketSource)
+				if s.URL != "https://dev.azure.com/org/proj/_git/repo" {
+					t.Errorf("URL = %v, want https://dev.azure.com/org/proj/_git/repo", s.URL)
+				}
+				if s.Ref != "main" {
+					t.Errorf("Ref = %v, want main", s.Ref)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setup != nil {
+				tt.setup()
+			}
+
+			result, err := ParseMarketplaceSource(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.SourceType() != tt.wantType {
+				t.Errorf("SourceType() = %v, want %v", result.SourceType(), tt.wantType)
+			}
+			if tt.assertFunc != nil {
+				tt.assertFunc(t, result)
+			}
+		})
+	}
+}
+
+func TestSplitSourceRef(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantBase string
+		wantRef  string
+	}{
+		{"hash ref", "owner/repo#main", "owner/repo", "main"},
+		{"at ref github shorthand", "owner/repo@v1.0.0", "owner/repo", "v1.0.0"},
+		{"SSH URL with hash ref", "git@github.com:owner/repo.git#release", "git@github.com:owner/repo.git", "release"},
+		{"SSH URL no ref", "git@github.com:owner/repo.git", "git@github.com:owner/repo.git", ""},
+		{"HTTPS URL with hash ref", "https://github.com/owner/repo#main", "https://github.com/owner/repo", "main"},
+		{"deploy SSH URL no split at", "deploy@gitlab.com:group/project.git", "deploy@gitlab.com:group/project.git", ""},
+		{"deploy SSH URL with hash ref", "deploy@gitlab.com:group/project.git#dev", "deploy@gitlab.com:group/project.git", "dev"},
+		{"no ref", "owner/repo", "owner/repo", ""},
+		{"whitespace trimmed", " owner/repo#main ", "owner/repo", "main"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base, ref := splitSourceRef(tt.input)
+			if base != tt.wantBase {
+				t.Errorf("base = %q, want %q", base, tt.wantBase)
+			}
+			if ref != tt.wantRef {
+				t.Errorf("ref = %q, want %q", ref, tt.wantRef)
+			}
+		})
+	}
+}
+
+func TestParseMarketplaceSource_GitHubShorthandSSH(t *testing.T) {
+	t.Run("git@github.com:owner/repo.git#release", func(t *testing.T) {
+		result, err := ParseMarketplaceSource("git@github.com:owner/repo.git#release")
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, ok := result.(*GitMarketSource)
+		if !ok {
+			t.Fatalf("expected *GitMarketSource, got %T", result)
+		}
+		if src.URL != "git@github.com:owner/repo.git" {
+			t.Errorf("URL = %v, want git@github.com:owner/repo.git", src.URL)
+		}
+		if src.Ref != "release" {
+			t.Errorf("Ref = %v, want release", src.Ref)
+		}
+	})
+}
+
+func TestParseMarketplaceSource_HomePathExpansion(t *testing.T) {
+	t.Run("nonexistent home path is error", func(t *testing.T) {
+		input := "~/nonexistent_dir_for_testing_12345"
+		_, err := ParseMarketplaceSource(input)
+		if err == nil {
+			t.Error("expected error for nonexistent home-relative path")
+		}
+		if !strings.Contains(err.Error(), "does not exist") {
+			t.Errorf("expected unsupported format error, got: %v", err)
+		}
+	})
 }

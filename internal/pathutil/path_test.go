@@ -1,0 +1,223 @@
+package pathutil
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestResolvePathWithinBase(t *testing.T) {
+	t.Run("valid relative path", func(t *testing.T) {
+		base := t.TempDir()
+		got, err := ResolvePathWithinBase(base, "foo/bar.json")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(base, "foo", "bar.json")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("rejects absolute path", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := ResolvePathWithinBase(base, "/etc/passwd")
+		if err == nil {
+			t.Fatal("expected error for absolute path")
+		}
+	})
+
+	t.Run("rejects dot dot traversal", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := ResolvePathWithinBase(base, "../../outside")
+		if err == nil {
+			t.Fatal("expected error for .. traversal")
+		}
+	})
+
+	t.Run("rejects symlink escape", func(t *testing.T) {
+		base := t.TempDir()
+		outside := t.TempDir()
+		linkDir := filepath.Join(base, "link")
+		if err := os.Symlink(outside, linkDir); err != nil {
+			t.Skipf("symlinks not supported: %v", err)
+		}
+		_, err := ResolvePathWithinBase(base, "link/file")
+		if err == nil {
+			t.Fatal("expected error for symlink escape")
+		}
+	})
+
+	t.Run("rejects symlink to base parent for missing child", func(t *testing.T) {
+		parent := t.TempDir()
+		base := filepath.Join(parent, "base")
+		if err := os.MkdirAll(base, 0755); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		linkDir := filepath.Join(base, "link")
+		if err := os.Symlink(parent, linkDir); err != nil {
+			t.Skipf("symlinks not supported: %v", err)
+		}
+		_, err := ResolvePathWithinBase(base, "link/escaped/new-file")
+		if err == nil {
+			t.Fatal("expected error for symlink to base parent")
+		}
+	})
+
+	t.Run("allows existing file within base", func(t *testing.T) {
+		base := t.TempDir()
+		file := filepath.Join(base, "real.txt")
+		if err := os.WriteFile(file, []byte("data"), 0644); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		got, err := ResolvePathWithinBase(base, "real.txt")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		evGot, _ := filepath.EvalSymlinks(got)
+		evWant, _ := filepath.EvalSymlinks(file)
+		if evGot != evWant {
+			t.Fatalf("got %q, want %q", got, file)
+		}
+	})
+}
+
+func TestSafeMarketplaceCachePath(t *testing.T) {
+	t.Run("legacy alias with slash", func(t *testing.T) {
+		base := t.TempDir()
+		got, err := SafeMarketplaceCachePath(base, "anthropics/claude-plugins-official", ".json")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(base, "anthropics-claude-plugins-official.json")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("malicious dot dot alias", func(t *testing.T) {
+		base := t.TempDir()
+		got, err := SafeMarketplaceCachePath(base, "../../outside", ".json")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(base, "..-..-outside.json")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+		if !filepath.IsAbs(got) {
+			t.Fatalf("expected absolute path")
+		}
+		if strings.Contains(got, string(filepath.Separator)+".."+string(filepath.Separator)) {
+			t.Fatalf("path should not contain '..' as a directory component")
+		}
+	})
+
+	t.Run("dot alias rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafeMarketplaceCachePath(base, ".", ".json")
+		if err == nil {
+			t.Fatal("expected error for '.' alias")
+		}
+	})
+
+	t.Run("dot dot alias rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafeMarketplaceCachePath(base, "..", ".json")
+		if err == nil {
+			t.Fatal("expected error for '..' alias")
+		}
+	})
+
+	t.Run("empty alias rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafeMarketplaceCachePath(base, "", ".json")
+		if err == nil {
+			t.Fatal("expected error for empty alias")
+		}
+	})
+
+	t.Run("normal alias", func(t *testing.T) {
+		base := t.TempDir()
+		got, err := SafeMarketplaceCachePath(base, "my-market", ".json")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(base, "my-market.json")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("existing remote install location outside marketsDir rejected", func(t *testing.T) {
+		base := t.TempDir()
+		outside := t.TempDir()
+		resolved, err := ResolvePathWithinBase(outside, "some-file")
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		absBase, _ := filepath.Abs(filepath.Clean(base))
+		if strings.HasPrefix(resolved, absBase+string(filepath.Separator)) {
+			t.Skip("outside path happened to be inside base")
+		}
+	})
+}
+
+func TestSafePluginCachePath(t *testing.T) {
+	t.Run("basic plugin@market", func(t *testing.T) {
+		base := t.TempDir()
+		got, err := SafePluginCachePath(base, "my-plugin@my-market", "1.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(base, "my-market", "my-plugin", "1.0.0")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("scoped plugin@market splits at last @", func(t *testing.T) {
+		base := t.TempDir()
+		got, err := SafePluginCachePath(base, "@scope/plugin@my-market", "2.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := filepath.Join(base, "my-market", "@scope-plugin", "2.0.0")
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("empty plugin ID rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafePluginCachePath(base, "", "1.0.0")
+		if err == nil {
+			t.Fatal("expected error for empty plugin ID")
+		}
+	})
+
+	t.Run("empty version rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafePluginCachePath(base, "plugin@market", "")
+		if err == nil {
+			t.Fatal("expected error for empty version")
+		}
+	})
+
+	t.Run("dot dot version rejected", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafePluginCachePath(base, "plugin@market", "..")
+		if err == nil {
+			t.Fatal("expected error for '..' version")
+		}
+	})
+
+	t.Run("plugin only without market", func(t *testing.T) {
+		base := t.TempDir()
+		_, err := SafePluginCachePath(base, "my-plugin", "1.0.0")
+		if err == nil {
+			t.Fatal("expected error for plugin without marketplace")
+		}
+	})
+}

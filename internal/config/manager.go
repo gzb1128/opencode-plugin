@@ -29,6 +29,10 @@ func NewManager() (*Manager, error) {
 	return &Manager{paths: paths}, nil
 }
 
+func NewManagerWithPath(paths *Paths) *Manager {
+	return &Manager{paths: paths}
+}
+
 func (m *Manager) LoadKnownMarkets() (KnownMarkets, error) {
 	data, err := os.ReadFile(m.paths.KnownMarkets)
 	if err != nil {

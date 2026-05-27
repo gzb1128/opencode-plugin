@@ -58,8 +58,11 @@ var listCmd = &cobra.Command{
 				fmt.Printf("    Location: %s\n", installLoc)
 
 				source := marketplace.NewMarketSourceFromConfig(market)
-				indexPath := marketplace.MarketSourceIndexPath(source)
-				if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+				indexPath, err := marketplace.MarketSourceIndexPath(source)
+				if err != nil {
+					fmt.Printf("    Status: Error (%v)\n", err)
+					notClonedCount++
+				} else if _, err := os.Stat(indexPath); os.IsNotExist(err) {
 					fmt.Printf("    Status: Not cloned\n")
 					notClonedCount++
 				} else {

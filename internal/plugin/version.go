@@ -3,25 +3,56 @@ package plugin
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/opencode/plugin-cli/internal/marketplace"
+	"github.com/opencode/plugin-cli/internal/pathutil"
 )
+
+type PluginResolutionContext struct {
+	MarketPath string
+	PluginRoot string
+}
+
+type NPMRunner interface {
+	Install(packageSpec, prefix, registry string) error
+}
 
 type VersionResolver struct {
 	gitClient *GitClient
+	npmRunner NPMRunner
 }
 
 type GitClient struct{}
 
+type productionNPMRunner struct{}
+
+func (r *productionNPMRunner) Install(packageSpec, prefix, registry string) error {
+	args := []string{"install", packageSpec, "--prefix", prefix}
+	if registry != "" {
+		args = append(args, "--registry", registry)
+	}
+	cmd := exec.Command("npm", args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func NewVersionResolver() *VersionResolver {
 	return &VersionResolver{
 		gitClient: &GitClient{},
+		npmRunner: &productionNPMRunner{},
 	}
+}
+
+func (v *VersionResolver) SetNPMRunner(runner NPMRunner) {
+	v.npmRunner = runner
 }
 
 func (v *VersionResolver) Resolve(pluginPath string, requested string) (string, error) {
@@ -78,6 +109,11 @@ func (g *GitClient) GetCommitSHA(path string) (string, error) {
 }
 
 func (v *VersionResolver) GetPluginSourcePath(plugin *marketplace.Plugin, marketPath string) (string, error) {
+	ctx := PluginResolutionContext{MarketPath: marketPath, PluginRoot: ""}
+	return v.GetPluginSourcePathWithCtx(plugin, ctx)
+}
+
+func (v *VersionResolver) GetPluginSourcePathWithCtx(plugin *marketplace.Plugin, ctx PluginResolutionContext) (string, error) {
 	src, ok := plugin.Source.(marketplace.PluginSource)
 	if !ok {
 		return "", fmt.Errorf("invalid plugin source format")
@@ -85,7 +121,24 @@ func (v *VersionResolver) GetPluginSourcePath(plugin *marketplace.Plugin, market
 
 	switch s := src.(type) {
 	case *marketplace.LocalSource:
-		return filepath.Join(marketPath, s.Path), nil
+		base := ctx.MarketPath
+		if ctx.PluginRoot != "" {
+			base = filepath.Join(base, ctx.PluginRoot)
+		}
+		resolved := filepath.Join(base, s.Path)
+		if ctx.MarketPath != "" {
+			validated, err := pathutil.ResolvePathWithinBase(ctx.MarketPath, filepath.Join(func() string {
+				if ctx.PluginRoot != "" {
+					return ctx.PluginRoot + string(filepath.Separator) + s.Path
+				}
+				return s.Path
+			}()))
+			if err != nil {
+				return "", fmt.Errorf("plugin source path escapes marketplace root: %w", err)
+			}
+			return validated, nil
+		}
+		return resolved, nil
 	default:
 		return "", fmt.Errorf("unsupported plugin source type: %s (plugin may need to be cloned first)", src.SourceType())
 	}
@@ -125,12 +178,105 @@ func (v *VersionResolver) clonePluginSource(src marketplace.PluginSource, cacheP
 	case *marketplace.GitSubdirSource:
 		return v.cloneGitSubdirSource(s, cachePath)
 	case *marketplace.NpmSource:
-		return fmt.Errorf("npm source installation not yet implemented for package: %s", s.Package)
+		return v.installNpmSource(s, cachePath)
 	case *marketplace.PipSource:
 		return fmt.Errorf("pip source installation not yet implemented for package: %s", s.Package)
 	default:
 		return fmt.Errorf("source type '%s' is not a remote source", src.SourceType())
 	}
+}
+
+func (v *VersionResolver) installNpmSource(src *marketplace.NpmSource, cachePath string) error {
+	if _, err := os.Stat(cachePath); err == nil {
+		os.RemoveAll(cachePath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	isLocal := src.Package != "" && isLocalPath(src.Package)
+
+	var packageSpec string
+	var resolvedName string
+
+	if isLocal {
+		if src.Version != "" {
+			return fmt.Errorf("npm source with local path must not specify version: %s", src.Version)
+		}
+		packageSpec = src.Package
+		var err error
+		resolvedName, err = readPackageNameFromJSON(src.Package)
+		if err != nil {
+			return fmt.Errorf("failed to read package name from local package: %w", err)
+		}
+	} else {
+		packageSpec = src.Package
+		if src.Version != "" {
+			packageSpec = src.Package + "@" + src.Version
+		}
+		resolvedName = extractPackageNameFromSpec(src.Package)
+	}
+
+	npmCacheDir, err := os.MkdirTemp("", "opencode-npm-cache-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir for npm install: %w", err)
+	}
+	defer os.RemoveAll(npmCacheDir)
+
+	if err := v.npmRunner.Install(packageSpec, npmCacheDir, src.Registry); err != nil {
+		return fmt.Errorf("npm install failed: %w", err)
+	}
+
+	installedPath := filepath.Join(npmCacheDir, "node_modules", resolvedName)
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		return fmt.Errorf("installed package not found at %s", installedPath)
+	}
+
+	if err := copyRecursive(installedPath, cachePath); err != nil {
+		return fmt.Errorf("failed to copy installed package to cache: %w", err)
+	}
+
+	return nil
+}
+
+func isLocalPath(path string) bool {
+	if filepath.IsAbs(path) {
+		return true
+	}
+	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") || strings.HasPrefix(path, "~/") {
+		return true
+	}
+	return false
+}
+
+func readPackageNameFromJSON(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return "", fmt.Errorf("failed to read package.json: %w", err)
+	}
+	var pkg struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return "", fmt.Errorf("failed to parse package.json: %w", err)
+	}
+	if pkg.Name == "" {
+		return "", fmt.Errorf("package.json missing name field")
+	}
+	return pkg.Name, nil
+}
+
+func extractPackageNameFromSpec(spec string) string {
+	if strings.HasPrefix(spec, "@") {
+		parts := strings.SplitN(spec, "/", 2)
+		if len(parts) == 2 {
+			scopeAndName := parts[0] + "/" + strings.SplitN(parts[1], "@", 2)[0]
+			return scopeAndName
+		}
+		return spec
+	}
+	return strings.SplitN(spec, "@", 2)[0]
 }
 
 func (v *VersionResolver) cloneGitSource(gitURL, ref, sha, cachePath string) error {
@@ -262,19 +408,36 @@ func copyRecursive(src, dst string) error {
 		if entry.Name() == ".git" {
 			continue
 		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("failed to stat %s: %w", entry.Name(), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 
-		if entry.IsDir() {
+		if info.IsDir() {
 			if err := copyRecursive(srcPath, dstPath); err != nil {
 				return err
 			}
 		} else {
-			data, err := os.ReadFile(srcPath)
+			in, err := os.Open(srcPath)
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+			out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+			if err != nil {
+				in.Close()
+				return err
+			}
+			_, err = io.Copy(out, in)
+			in.Close()
+			out.Close()
+			if err != nil {
 				return err
 			}
 		}

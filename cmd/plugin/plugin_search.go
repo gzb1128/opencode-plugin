@@ -58,7 +58,13 @@ Examples:
 
 			source := marketplace.NewMarketSourceFromConfig(market)
 
-			mp, err := marketplace.ParseMarketplaceIndex(marketplace.MarketSourceIndexPath(source))
+			indexPath, err := marketplace.MarketSourceIndexPath(source)
+			if err != nil {
+				skippedMarkets = append(skippedMarkets, mName)
+				continue
+			}
+
+			mp, err := marketplace.ParseMarketplaceIndex(indexPath)
 			if err != nil {
 				// Marketplace not cloned yet, track it
 				skippedMarkets = append(skippedMarkets, mName)

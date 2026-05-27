@@ -172,6 +172,150 @@ func TestParseMarketplaceIndex(t *testing.T) {
 	})
 }
 
+func TestParseDependencies_StringForm(t *testing.T) {
+	content := `{
+  "name": "deps-market",
+  "plugins": [
+    {
+      "name": "root",
+      "description": "Root plugin",
+      "source": "./plugins/root",
+	      "dependencies": ["dep", "other@shared", "range@shared@^1.2.0", "dep@v2", "dep@2026"]
+    }
+  ]
+}`
+
+	tmpFile := filepath.Join(t.TempDir(), "deps-market.json")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mp, err := ParseMarketplaceIndex(tmpFile)
+	if err != nil {
+		t.Fatalf("ParseMarketplaceIndex() error = %v", err)
+	}
+
+	if len(mp.Plugins) != 1 {
+		t.Fatalf("Plugins count = %v, want 1", len(mp.Plugins))
+	}
+
+	deps := mp.Plugins[0].Dependencies
+	want := []string{"dep", "other@shared", "range@shared", "dep@v2", "dep@2026"}
+	if len(deps) != len(want) {
+		t.Fatalf("Dependencies = %v, want %v", deps, want)
+	}
+	for i, d := range deps {
+		if d != want[i] {
+			t.Errorf("Dependencies[%d] = %q, want %q", i, d, want[i])
+		}
+	}
+}
+
+func TestParseDependencies_ObjectForm(t *testing.T) {
+	content := `{
+  "name": "obj-deps-market",
+  "plugins": [
+    {
+      "name": "root",
+      "description": "Root plugin",
+      "source": "./plugins/root",
+      "dependencies": [
+        { "name": "dep" },
+        { "name": "shared-dep", "marketplace": "shared" }
+      ]
+    }
+  ]
+}`
+
+	tmpFile := filepath.Join(t.TempDir(), "obj-deps-market.json")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mp, err := ParseMarketplaceIndex(tmpFile)
+	if err != nil {
+		t.Fatalf("ParseMarketplaceIndex() error = %v", err)
+	}
+
+	deps := mp.Plugins[0].Dependencies
+	want := []string{"dep", "shared-dep@shared"}
+	if len(deps) != len(want) {
+		t.Fatalf("Dependencies = %v, want %v", deps, want)
+	}
+	for i, d := range deps {
+		if d != want[i] {
+			t.Errorf("Dependencies[%d] = %q, want %q", i, d, want[i])
+		}
+	}
+}
+
+func TestParseDependencyRef_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     interface{}
+		wantErr string
+	}{
+		{"number type", float64(42), "must be a string or object"},
+		{"object missing name", map[string]interface{}{"marketplace": "m"}, "must have a 'name' field"},
+		{"empty string", "", "must not be empty"},
+		{"slash in name", "foo/bar", "must not contain '/'"},
+		{"backslash in name", "foo\\bar", "must not contain '/'"},
+		{"dot dot in name", "foo..bar", "must not contain '..'"},
+		{"too many at segments", "a@b@c@d", "too many '@' segments"},
+		{"three-part empty version", "a@b@", "version must not be empty"},
+		{"three-part slash version", "a@b@../evil", "must not contain"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseDependencyRef(tt.raw)
+			if err == nil {
+				t.Fatalf("expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestPluginRootMetadata(t *testing.T) {
+	content := `{
+  "name": "rooted-market",
+  "metadata": { "pluginRoot": "packages" },
+  "plugins": [
+    {
+      "name": "tool",
+      "description": "Tool",
+      "source": "./tool"
+    }
+  ]
+}`
+
+	tmpFile := filepath.Join(t.TempDir(), "rooted-market.json")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mp, err := ParseMarketplaceIndex(tmpFile)
+	if err != nil {
+		t.Fatalf("ParseMarketplaceIndex() error = %v", err)
+	}
+
+	if mp.Metadata == nil || mp.Metadata.PluginRoot != "packages" {
+		t.Fatalf("Metadata.PluginRoot = %v, want 'packages'", mp.Metadata)
+	}
+
+	p := mp.Plugins[0]
+	src, ok := p.Source.(*LocalSource)
+	if !ok {
+		t.Fatalf("Source type = %T, want *LocalSource", p.Source)
+	}
+	if src.Path != "./tool" {
+		t.Errorf("Path = %v, want ./tool", src.Path)
+	}
+}
+
 func TestParsePluginSource_AllTypes(t *testing.T) {
 	tests := []struct {
 		name           string

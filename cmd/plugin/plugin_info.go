@@ -54,20 +54,28 @@ Examples:
 		// Find plugin
 		paths := configMgr.GetPaths()
 		mgr := marketplace.NewManager(paths.MarketsDir)
-		p, market, foundMarketName, err := mgr.FindPlugin(marketSources, pluginName, marketName)
+		resolved, err := mgr.ResolvePlugin(marketSources, pluginName, marketName)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Use found market name if not specified
+		p := resolved.Plugin
+		market := resolved.Market
 		if marketName == "" {
-			marketName = foundMarketName
+			marketName = resolved.MarketName
 		}
 
 		// Get plugin path
 		resolver := plugin.NewVersionResolver()
-		pluginPath, err := resolver.GetPluginSourcePath(p, market.InstallLocation())
+		pluginRoot := ""
+		if resolved.Marketplace != nil && resolved.Marketplace.Metadata != nil {
+			pluginRoot = resolved.Marketplace.Metadata.PluginRoot
+		}
+		pluginPath, err := resolver.GetPluginSourcePathWithCtx(p, plugin.PluginResolutionContext{
+			MarketPath: market.InstallLocation(),
+			PluginRoot: pluginRoot,
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
