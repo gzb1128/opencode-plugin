@@ -37,15 +37,14 @@ func ParseMarketplaceSource(url string) (MarketSource, error) {
 			return nil, fmt.Errorf("failed to expand home directory: %w", err)
 		}
 		expanded := filepath.Join(home, url[2:])
-		if _, err := os.Stat(expanded); err == nil {
-			absPath := expanded
-			info, err := os.Stat(absPath)
-			if err == nil && !info.IsDir() {
-				return &FileMarketSource{Path: absPath}, nil
+		info, err := os.Stat(expanded)
+		if err == nil {
+			if !info.IsDir() {
+				return &FileMarketSource{Path: expanded}, nil
 			}
-			return &DirectoryMarketSource{Path: absPath}, nil
+			return &DirectoryMarketSource{Path: expanded}, nil
 		}
-		return nil, fmt.Errorf("unsupported marketplace source format: %s", url)
+		return nil, fmt.Errorf("home-relative path does not exist: %s", expanded)
 	}
 
 	if _, err := os.Stat(url); err == nil {

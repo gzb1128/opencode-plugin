@@ -412,6 +412,8 @@ func TestParseMarketplaceSource_InputParity(t *testing.T) {
 		name       string
 		input      string
 		wantType   string
+		setup      func()
+		cleanup    func()
 		assertFunc func(t *testing.T, src MarketSource)
 	}{
 		{
@@ -499,6 +501,14 @@ func TestParseMarketplaceSource_InputParity(t *testing.T) {
 			name:     "home-relative path",
 			input:    "~/marketplaces/company",
 			wantType: "directory",
+			setup: func() {
+				home, _ := os.UserHomeDir()
+				os.MkdirAll(filepath.Join(home, "marketplaces", "company"), 0755)
+			},
+			cleanup: func() {
+				home, _ := os.UserHomeDir()
+				os.RemoveAll(filepath.Join(home, "marketplaces"))
+			},
 			assertFunc: func(t *testing.T, src MarketSource) {
 				s := src.(*DirectoryMarketSource)
 				home, _ := os.UserHomeDir()
@@ -512,11 +522,11 @@ func TestParseMarketplaceSource_InputParity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.name == "home-relative path" {
-				home, _ := os.UserHomeDir()
-				dir := filepath.Join(home, "marketplaces", "company")
-				os.MkdirAll(dir, 0755)
-				defer os.RemoveAll(filepath.Join(home, "marketplaces"))
+			if tt.setup != nil {
+				tt.setup()
+			}
+			if tt.cleanup != nil {
+				defer tt.cleanup()
 			}
 
 			result, err := ParseMarketplaceSource(tt.input)
@@ -590,7 +600,7 @@ func TestParseMarketplaceSource_HomePathExpansion(t *testing.T) {
 		if err == nil {
 			t.Error("expected error for nonexistent home-relative path")
 		}
-		if !strings.Contains(err.Error(), "unsupported") {
+		if !strings.Contains(err.Error(), "does not exist") {
 			t.Errorf("expected unsupported format error, got: %v", err)
 		}
 	})
