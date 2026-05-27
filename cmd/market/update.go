@@ -79,9 +79,9 @@ func updateMarket(mgr *marketplace.Manager, configMgr *config.Manager, name stri
 
 	fmt.Printf("Updating %s...\n", name)
 
-	url := getMarketURL(market)
+	source := marketplace.NewMarketSourceFromConfig(market)
 
-	mp, resultSource, err := mgr.Add(name, url)
+	mp, resultSource, err := mgr.AddSource(name, source)
 	if err != nil {
 		return err
 	}
@@ -191,7 +191,8 @@ Examples:
 		if !isLocalMarketType(marketType) {
 			paths := configMgr.GetPaths()
 			mgr := marketplace.NewManager(paths.MarketsDir)
-			if err := mgr.Remove(name); err != nil {
+			source := marketplace.NewMarketSourceFromConfig(market)
+			if err := mgr.RemoveSource(name, source); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: Failed to remove marketplace directory: %v\n", err)
 			} else {
 				fmt.Printf("✓ Removed marketplace directory: %s\n", installLoc)

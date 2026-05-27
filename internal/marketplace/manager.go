@@ -2,8 +2,14 @@ package marketplace
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/opencode/plugin-cli/internal/pathutil"
 )
 
 type Manager struct {
@@ -24,6 +30,10 @@ func (m *Manager) Add(name, url string) (*Marketplace, MarketSource, error) {
 		return nil, nil, fmt.Errorf("failed to parse marketplace source: %w", err)
 	}
 
+	return m.AddSource(name, source)
+}
+
+func (m *Manager) AddSource(name string, source MarketSource) (*Marketplace, MarketSource, error) {
 	marketDir := filepath.Join(m.marketsDir, name)
 
 	switch s := source.(type) {
@@ -34,7 +44,11 @@ func (m *Manager) Add(name, url string) (*Marketplace, MarketSource, error) {
 		}
 
 	case *URLMarketSource:
-		return nil, nil, fmt.Errorf("JSON URL marketplace not yet implemented")
+		cachedPath, err := m.cacheMarketplaceFromURL(name, s)
+		if err != nil {
+			return nil, nil, err
+		}
+		marketDir = cachedPath
 
 	case *LocalMarketSource, *DirectoryMarketSource:
 		marketDir = GetMarketSourcePath(source)
@@ -48,7 +62,10 @@ func (m *Manager) Add(name, url string) (*Marketplace, MarketSource, error) {
 
 	source.SetInstallLocation(marketDir)
 
-	indexPath := MarketSourceIndexPath(source)
+	indexPath, err := MarketSourceIndexPath(source)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to resolve index path: %w", err)
+	}
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
 		return nil, nil, fmt.Errorf("marketplace.json not found at %s", indexPath)
 	}
@@ -59,6 +76,67 @@ func (m *Manager) Add(name, url string) (*Marketplace, MarketSource, error) {
 	}
 
 	return marketplace, source, nil
+}
+
+func (m *Manager) cacheMarketplaceFromURL(name string, source *URLMarketSource) (string, error) {
+	if err := os.MkdirAll(m.marketsDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create markets directory: %w", err)
+	}
+
+	cachePath, err := pathutil.SafeMarketplaceCachePath(m.marketsDir, name, ".json")
+	if err != nil {
+		return "", fmt.Errorf("failed to compute cache path: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", source.URL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	for k, v := range source.Headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch marketplace: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP request failed with status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(m.marketsDir, ".marketplace-tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.Write(body); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to write cache: %w", err)
+	}
+	tmpFile.Close()
+
+	if _, err := ParseMarketplaceIndex(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("invalid marketplace content: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, cachePath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to write cache: %w", err)
+	}
+
+	source.SetInstallLocation(cachePath)
+	return cachePath, nil
 }
 
 func (m *Manager) Get(marketDir string) (*Marketplace, error) {
@@ -86,7 +164,10 @@ func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, market
 			return nil, nil, "", fmt.Errorf("marketplace %s not found", marketName)
 		}
 
-		indexPath := MarketSourceIndexPath(market)
+		indexPath, err := MarketSourceIndexPath(market)
+		if err != nil {
+			return nil, nil, "", err
+		}
 		marketplace, err := ParseMarketplaceIndex(indexPath)
 		if err != nil {
 			return nil, nil, "", err
@@ -102,7 +183,10 @@ func (m *Manager) FindPlugin(markets map[string]MarketSource, pluginName, market
 	}
 
 	for mName, market := range markets {
-		indexPath := MarketSourceIndexPath(market)
+		indexPath, err := MarketSourceIndexPath(market)
+		if err != nil {
+			continue
+		}
 		marketplace, err := ParseMarketplaceIndex(indexPath)
 		if err != nil {
 			continue
@@ -129,11 +213,68 @@ func (m *Manager) Remove(name string) error {
 	return os.RemoveAll(marketDir)
 }
 
-func MarketSourceIndexPath(source MarketSource) string {
-	if fileSource, ok := source.(*FileMarketSource); ok && fileSource.Path != "" {
-		return fileSource.Path
+func (m *Manager) RemoveSource(name string, source MarketSource) error {
+	switch source.(type) {
+	case *GitHubMarketSource, *GitMarketSource:
+		cachePath, err := pathutil.SafeMarketplaceCachePath(m.marketsDir, name, "")
+		if err != nil {
+			return m.Remove(name)
+		}
+		if info, err := os.Stat(cachePath); err == nil && info.IsDir() {
+			return os.RemoveAll(cachePath)
+		}
+		return m.Remove(name)
+	case *URLMarketSource:
+		loc := source.InstallLocation()
+		if loc == "" {
+			return nil
+		}
+		if !isWithinMarketsDir(loc, m.marketsDir) {
+			return nil
+		}
+		if info, err := os.Stat(loc); err == nil && !info.IsDir() {
+			return os.Remove(loc)
+		}
+		return nil
+	case *LocalMarketSource, *FileMarketSource, *DirectoryMarketSource:
+		return nil
+	default:
+		return m.Remove(name)
 	}
-	return filepath.Join(source.InstallLocation(), ".claude-plugin", "marketplace.json")
+}
+
+func isWithinMarketsDir(path, marketsDir string) bool {
+	absPath, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	absBase, err := filepath.Abs(filepath.Clean(marketsDir))
+	if err != nil {
+		return false
+	}
+	evalPath := absPath
+	if ev, err := filepath.EvalSymlinks(absPath); err == nil {
+		evalPath = ev
+	}
+	evalBase := absBase
+	if ev, err := filepath.EvalSymlinks(absBase); err == nil {
+		evalBase = ev
+	}
+	return (strings.HasPrefix(evalPath, evalBase+string(filepath.Separator)) || strings.HasPrefix(absPath, absBase+string(filepath.Separator))) && absPath != absBase
+}
+
+func MarketSourceIndexPath(source MarketSource) (string, error) {
+	switch s := source.(type) {
+	case *FileMarketSource:
+		return s.Path, nil
+	case *URLMarketSource:
+		if s.InstallLocation() != "" {
+			return s.InstallLocation(), nil
+		}
+		return "", fmt.Errorf("URL market source has no install location")
+	default:
+		return pathutil.ResolvePathWithinBase(source.InstallLocation(), ".claude-plugin"+string(filepath.Separator)+"marketplace.json")
+	}
 }
 
 func marketplaceRootForIndexPath(indexPath string) string {
