@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/opencode/plugin-cli/internal/config"
@@ -51,114 +52,97 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 		return fmt.Errorf("failed to load marketplaces: %w", err)
 	}
 
-	plugin, marketSrc, marketName, err := i.findPlugin(markets, pluginName, opts.MarketName)
+	marketSources := make(map[string]marketplace.MarketSource)
+	for name, src := range markets {
+		marketSources[name] = marketplace.NewMarketSourceFromConfig(src)
+	}
+
+	rootResolved, err := i.marketMgr.ResolvePlugin(marketSources, pluginName, opts.MarketName)
 	if err != nil {
 		return err
 	}
 
-	opts.MarketName = marketName
-	marketPath := marketSrc.InstallLocation()
+	opts.MarketName = rootResolved.MarketName
+	rootID := fmt.Sprintf("%s@%s", rootResolved.Plugin.Name, rootResolved.MarketName)
 
-	isRemote := i.resolver.IsRemoteSource(plugin)
-	var pluginPath string
-
-	if isRemote {
-		version, err := i.resolveRemoteVersion(plugin, opts.Version)
-		if err != nil {
-			return fmt.Errorf("failed to resolve version: %w", err)
-		}
-
-		cachePath := filepath.Join(
-			i.configMgr.GetPaths().CacheDir,
-			opts.MarketName,
-			pluginName,
-			version,
-		)
-
-		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
-			fmt.Printf("  Cloning plugin from remote repository...\n")
-			if err := i.resolver.CloneRemotePlugin(plugin, cachePath); err != nil {
-				return fmt.Errorf("failed to clone plugin: %w", err)
-			}
-		}
-
-		pluginPath = cachePath
-
-		counts, err := i.linker.CreateSymlinks(pluginPath)
-		if err != nil {
-			fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", err)
-		}
-
-		mcpCount, err := i.installMCP(pluginPath, pluginName)
-		if err != nil {
-			fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
-		}
-
-		key := fmt.Sprintf("%s@%s", pluginName, opts.MarketName)
-		record := &config.InstallRecord{
-			Scope:       opts.Scope,
-			InstallPath: cachePath,
-			Version:     version,
-			InstalledAt: time.Now(),
-		}
-
-		if err := i.configMgr.AddInstallRecord(key, record); err != nil {
-			return fmt.Errorf("failed to record installation: %w", err)
-		}
-
-		fmt.Printf("✓ Successfully installed plugin: %s@%s\n", pluginName, version)
-		fmt.Printf("  From marketplace: %s\n", opts.MarketName)
-		fmt.Printf("  Cache: %s\n", cachePath)
-		fmt.Printf("  Skills: %d\n", counts.Skills)
-		if mcpCount > 0 {
-			fmt.Printf("  MCP Servers: %d\n", mcpCount)
-		}
-
-		return nil
-	}
-
-	pluginPath, err = i.resolver.GetPluginSourcePath(plugin, marketPath)
+	installed, err := i.configMgr.LoadInstalledPlugins()
 	if err != nil {
-		return fmt.Errorf("failed to get plugin source path: %w", err)
+		return fmt.Errorf("failed to load installed plugins: %w", err)
+	}
+	alreadyInstalled := make(map[string]bool)
+	for key := range installed.Plugins {
+		alreadyInstalled[key] = true
 	}
 
-	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
-		return fmt.Errorf("plugin directory not found: %s", pluginPath)
+	resolvedMap := map[string]*marketplace.ResolvedPlugin{rootID: rootResolved}
+	lookup := func(id string) (*marketplace.ResolvedPlugin, error) {
+		if rp, ok := resolvedMap[id]; ok {
+			return rp, nil
+		}
+		parts := strings.SplitN(id, "@", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid plugin id: %s", id)
+		}
+		rp, err := i.marketMgr.ResolvePlugin(marketSources, parts[0], parts[1])
+		if err != nil {
+			return nil, err
+		}
+		resolvedMap[id] = rp
+		return rp, nil
 	}
 
-	version, err := i.resolver.Resolve(pluginPath, opts.Version)
-	if err != nil {
-		return fmt.Errorf("failed to resolve version: %w", err)
-	}
-
-	cachePath := filepath.Join(
-		i.configMgr.GetPaths().CacheDir,
-		opts.MarketName,
-		pluginName,
-		version,
-	)
-
-	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
-		if err := i.copyPluginToCache(pluginPath, cachePath); err != nil {
-			return fmt.Errorf("failed to copy plugin to cache: %w", err)
+	allowedCross := make(map[string]bool)
+	if rootResolved.Marketplace != nil {
+		for _, m := range rootResolved.Marketplace.AllowCrossMarketplaceDeps {
+			allowedCross[m] = true
 		}
 	}
 
-	counts, err := i.linker.CreateSymlinks(cachePath)
+	result, err := ResolveDependencyClosure(rootID, lookup, alreadyInstalled, allowedCross)
 	if err != nil {
-		return fmt.Errorf("failed to create symlinks: %w", err)
+		return fmt.Errorf("failed to resolve dependencies: %w", err)
 	}
 
-	mcpCount, err := i.installMCP(cachePath, pluginName)
+	for _, id := range result.Closure {
+		if id == rootID {
+			continue
+		}
+		rp := resolvedMap[id]
+		parts := strings.SplitN(id, "@", 2)
+		depOpts := InstallOptions{
+			MarketName: parts[1],
+			Version:    opts.Version,
+			Scope:      opts.Scope,
+		}
+		if err := i.installOneResolvedPlugin(rp, depOpts); err != nil {
+			return fmt.Errorf("failed to install dependency %s: %w", id, err)
+		}
+	}
+
+	return i.installOneResolvedPlugin(rootResolved, opts)
+}
+
+func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugin, opts InstallOptions) error {
+	mat, err := i.materializePlugin(resolved, opts)
+	if err != nil {
+		return err
+	}
+
+	counts, err := i.linker.CreateSymlinks(mat.Path)
+	if err != nil {
+		fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", err)
+	}
+
+	mcpCount, err := i.installMCP(mat.Path, resolved.Plugin.Name)
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
 	}
 
-	key := fmt.Sprintf("%s@%s", pluginName, opts.MarketName)
+	key := fmt.Sprintf("%s@%s", resolved.Plugin.Name, opts.MarketName)
 	record := &config.InstallRecord{
 		Scope:       opts.Scope,
-		InstallPath: cachePath,
-		Version:     version,
+		InstallPath: mat.Path,
+		Version:     mat.Version,
 		InstalledAt: time.Now(),
 	}
 
@@ -166,9 +150,9 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 		return fmt.Errorf("failed to record installation: %w", err)
 	}
 
-	fmt.Printf("✓ Successfully installed plugin: %s@%s\n", pluginName, version)
+	fmt.Printf("✓ Successfully installed plugin: %s@%s\n", resolved.Plugin.Name, mat.Version)
 	fmt.Printf("  From marketplace: %s\n", opts.MarketName)
-	fmt.Printf("  Cache: %s\n", cachePath)
+	fmt.Printf("  Cache: %s\n", mat.Path)
 	fmt.Printf("  Skills: %d\n", counts.Skills)
 	if mcpCount > 0 {
 		fmt.Printf("  MCP Servers: %d\n", mcpCount)
