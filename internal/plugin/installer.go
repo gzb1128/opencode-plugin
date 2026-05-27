@@ -184,6 +184,7 @@ func (i *Installer) resolveRemoteVersion(plugin *marketplace.Plugin, requested s
 	}
 
 	var sha string
+	var npmSrc *marketplace.NpmSource
 	switch s := src.(type) {
 	case *marketplace.GitHubSource:
 		sha = s.SHA
@@ -193,6 +194,8 @@ func (i *Installer) resolveRemoteVersion(plugin *marketplace.Plugin, requested s
 		sha = s.SHA
 	case *marketplace.GitSubdirSource:
 		sha = s.SHA
+	case *marketplace.NpmSource:
+		npmSrc = s
 	}
 
 	if sha != "" {
@@ -202,11 +205,41 @@ func (i *Installer) resolveRemoteVersion(plugin *marketplace.Plugin, requested s
 		return sha, nil
 	}
 
+	if npmSrc != nil {
+		if requested != "" && requested != "latest" {
+			return requested, nil
+		}
+		if npmSrc.Version != "" {
+			return npmSrc.Version, nil
+		}
+		if isLocalPath(npmSrc.Package) {
+			ver, err := readPackageVersionFromJSON(npmSrc.Package)
+			if err == nil && ver != "" {
+				return ver, nil
+			}
+		}
+		return "latest", nil
+	}
+
 	if requested != "" && requested != "latest" {
 		return requested, nil
 	}
 
 	return "latest", nil
+}
+
+func readPackageVersionFromJSON(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return "", fmt.Errorf("failed to read package.json: %w", err)
+	}
+	var pkg struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return "", fmt.Errorf("failed to parse package.json: %w", err)
+	}
+	return pkg.Version, nil
 }
 
 func (i *Installer) installMCP(pluginPath, pluginName string) (int, error) {

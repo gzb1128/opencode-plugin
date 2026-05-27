@@ -1,8 +1,10 @@
 package plugin
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/opencode/plugin-cli/internal/marketplace"
@@ -138,14 +140,6 @@ func TestGetPluginSourcePathWithCtx_TraversalCheck(t *testing.T) {
 func TestCloneRemotePlugin_UnsupportedTypes(t *testing.T) {
 	resolver := NewVersionResolver()
 	cachePath := filepath.Join(t.TempDir(), "cache")
-
-	t.Run("npm returns not implemented", func(t *testing.T) {
-		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "@org/plugin"}}
-		err := resolver.CloneRemotePlugin(&p, cachePath)
-		if err == nil {
-			t.Fatal("expected error for npm source")
-		}
-	})
 
 	t.Run("pip returns not implemented", func(t *testing.T) {
 		p := marketplace.Plugin{Source: &marketplace.PipSource{Package: "my-plugin"}}
@@ -295,4 +289,330 @@ func TestResolveRemoteVersion(t *testing.T) {
 			t.Errorf("expected 'latest', got '%s'", ver)
 		}
 	})
+
+	t.Run("npm source with version returns version", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "left-pad", Version: "1.3.0"}}
+		ver, err := installer.resolveRemoteVersion(&p, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "1.3.0" {
+			t.Errorf("expected '1.3.0', got '%s'", ver)
+		}
+	})
+
+	t.Run("npm source with explicit requested overrides version", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "left-pad", Version: "1.3.0"}}
+		ver, err := installer.resolveRemoteVersion(&p, "2.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "2.0.0" {
+			t.Errorf("expected '2.0.0', got '%s'", ver)
+		}
+	})
+
+	t.Run("npm source local path reads package.json version", func(t *testing.T) {
+		pkgDir := t.TempDir()
+		pkgJSON := `{"name": "test-pkg", "version": "3.5.0"}`
+		os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(pkgJSON), 0644)
+
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: pkgDir}}
+		ver, err := installer.resolveRemoteVersion(&p, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "3.5.0" {
+			t.Errorf("expected '3.5.0', got '%s'", ver)
+		}
+	})
+}
+
+type fakeNPMRunner struct {
+	calls       []fakeNPMBall
+	installFunc func(packageSpec, prefix, registry string) error
+}
+
+type fakeNPMBall struct {
+	PackageSpec string
+	Prefix      string
+	Registry    string
+}
+
+func (f *fakeNPMRunner) Install(packageSpec, prefix, registry string) error {
+	f.calls = append(f.calls, fakeNPMBall{
+		PackageSpec: packageSpec,
+		Prefix:      prefix,
+		Registry:    registry,
+	})
+
+	if f.installFunc != nil {
+		return f.installFunc(packageSpec, prefix, registry)
+	}
+
+	return nil
+}
+
+func createFakeNPMPackage(prefix, packageName string) {
+	pkgDir := filepath.Join(prefix, "node_modules", packageName)
+	os.MkdirAll(pkgDir, 0755)
+
+	manifestDir := filepath.Join(pkgDir, ".claude-plugin")
+	os.MkdirAll(manifestDir, 0755)
+	os.WriteFile(filepath.Join(manifestDir, "plugin.json"), []byte(`{"name":"test-plugin"}`), 0644)
+
+	skillDir := filepath.Join(pkgDir, "skills")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Skill"), 0644)
+}
+
+func createLocalNPMPackageDir(t *testing.T, packageName, version string) string {
+	t.Helper()
+	pkgDir := t.TempDir()
+	pkgJSON := fmt.Sprintf(`{"name": "%s", "version": "%s"}`, packageName, version)
+	os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(pkgJSON), 0644)
+
+	manifestDir := filepath.Join(pkgDir, ".claude-plugin")
+	os.MkdirAll(manifestDir, 0755)
+	os.WriteFile(filepath.Join(manifestDir, "plugin.json"), []byte(`{"name":"test-plugin"}`), 0644)
+
+	skillDir := filepath.Join(pkgDir, "skills")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Skill"), 0644)
+
+	return pkgDir
+}
+
+func TestNpmInstall_LocalPackage(t *testing.T) {
+	resolver := NewVersionResolver()
+
+	pkgDir := createLocalNPMPackageDir(t, "test-opencode-plugin", "1.0.0")
+
+	fakeRunner := &fakeNPMRunner{
+		installFunc: func(packageSpec, prefix, registry string) error {
+			createFakeNPMPackage(prefix, "test-opencode-plugin")
+			return nil
+		},
+	}
+	resolver.SetNPMRunner(fakeRunner)
+
+	cachePath := filepath.Join(t.TempDir(), "cache", "test-opencode-plugin")
+	p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: pkgDir}}
+	err := resolver.CloneRemotePlugin(&p, cachePath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+		t.Fatal("expected cache directory to exist")
+	}
+
+	if _, err := os.Stat(filepath.Join(cachePath, ".claude-plugin", "plugin.json")); os.IsNotExist(err) {
+		t.Fatal("expected plugin.json to exist in cache")
+	}
+
+	if len(fakeRunner.calls) != 1 {
+		t.Fatalf("expected 1 npm call, got %d", len(fakeRunner.calls))
+	}
+	if fakeRunner.calls[0].PackageSpec != pkgDir {
+		t.Errorf("expected packageSpec %s, got %s", pkgDir, fakeRunner.calls[0].PackageSpec)
+	}
+}
+
+func TestNpmInstall_ScopedLocalPackage(t *testing.T) {
+	resolver := NewVersionResolver()
+
+	pkgDir := createLocalNPMPackageDir(t, "@scope/test-opencode-plugin", "2.0.0")
+
+	fakeRunner := &fakeNPMRunner{
+		installFunc: func(packageSpec, prefix, registry string) error {
+			pkgPath := filepath.Join(prefix, "node_modules", "@scope", "test-opencode-plugin")
+			os.MkdirAll(pkgPath, 0755)
+			manifestDir := filepath.Join(pkgPath, ".claude-plugin")
+			os.MkdirAll(manifestDir, 0755)
+			os.WriteFile(filepath.Join(manifestDir, "plugin.json"), []byte(`{"name":"scoped-plugin"}`), 0644)
+			return nil
+		},
+	}
+	resolver.SetNPMRunner(fakeRunner)
+
+	cachePath := filepath.Join(t.TempDir(), "cache", "scoped-plugin")
+	p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: pkgDir}}
+	err := resolver.CloneRemotePlugin(&p, cachePath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+		t.Fatal("expected cache directory to exist")
+	}
+
+	if _, err := os.Stat(filepath.Join(cachePath, ".claude-plugin", "plugin.json")); os.IsNotExist(err) {
+		t.Fatal("expected plugin.json in cached scoped package")
+	}
+
+	if len(fakeRunner.calls) != 1 {
+		t.Fatalf("expected 1 npm call, got %d", len(fakeRunner.calls))
+	}
+
+	if !strings.Contains(fakeRunner.calls[0].PackageSpec, pkgDir) {
+		t.Errorf("expected packageSpec to contain %s, got %s", pkgDir, fakeRunner.calls[0].PackageSpec)
+	}
+}
+
+func TestNpmInstall_RegistryPackageWithVersion(t *testing.T) {
+	resolver := NewVersionResolver()
+
+	fakeRunner := &fakeNPMRunner{
+		installFunc: func(packageSpec, prefix, registry string) error {
+			createFakeNPMPackage(prefix, "left-pad")
+			return nil
+		},
+	}
+	resolver.SetNPMRunner(fakeRunner)
+
+	cachePath := filepath.Join(t.TempDir(), "cache", "left-pad")
+	p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "left-pad", Version: "1.3.0"}}
+	err := resolver.CloneRemotePlugin(&p, cachePath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(fakeRunner.calls) != 1 {
+		t.Fatalf("expected 1 npm call, got %d", len(fakeRunner.calls))
+	}
+	if fakeRunner.calls[0].PackageSpec != "left-pad@1.3.0" {
+		t.Errorf("expected packageSpec 'left-pad@1.3.0', got '%s'", fakeRunner.calls[0].PackageSpec)
+	}
+}
+
+func TestNpmInstall_RegistryPackageScoped(t *testing.T) {
+	resolver := NewVersionResolver()
+
+	fakeRunner := &fakeNPMRunner{
+		installFunc: func(packageSpec, prefix, registry string) error {
+			pkgPath := filepath.Join(prefix, "node_modules", "@scope", "my-plugin")
+			os.MkdirAll(pkgPath, 0755)
+			os.WriteFile(filepath.Join(pkgPath, "skill.md"), []byte("# Skill"), 0644)
+			return nil
+		},
+	}
+	resolver.SetNPMRunner(fakeRunner)
+
+	cachePath := filepath.Join(t.TempDir(), "cache", "scoped-reg")
+	p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "@scope/my-plugin", Version: "2.0.0"}}
+	err := resolver.CloneRemotePlugin(&p, cachePath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if fakeRunner.calls[0].PackageSpec != "@scope/my-plugin@2.0.0" {
+		t.Errorf("expected packageSpec '@scope/my-plugin@2.0.0', got '%s'", fakeRunner.calls[0].PackageSpec)
+	}
+}
+
+func TestNpmInstall_RegistryWithCustomRegistry(t *testing.T) {
+	resolver := NewVersionResolver()
+
+	fakeRunner := &fakeNPMRunner{
+		installFunc: func(packageSpec, prefix, registry string) error {
+			createFakeNPMPackage(prefix, "my-pkg")
+			return nil
+		},
+	}
+	resolver.SetNPMRunner(fakeRunner)
+
+	cachePath := filepath.Join(t.TempDir(), "cache", "custom-reg")
+	p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "my-pkg", Version: "1.0.0", Registry: "https://my.registry.com"}}
+	err := resolver.CloneRemotePlugin(&p, cachePath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if fakeRunner.calls[0].Registry != "https://my.registry.com" {
+		t.Errorf("expected registry 'https://my.registry.com', got '%s'", fakeRunner.calls[0].Registry)
+	}
+}
+
+func TestNpmInstall_LocalPackageRejectsVersion(t *testing.T) {
+	resolver := NewVersionResolver()
+
+	pkgDir := createLocalNPMPackageDir(t, "test-pkg", "1.0.0")
+	resolver.SetNPMRunner(&fakeNPMRunner{})
+
+	cachePath := filepath.Join(t.TempDir(), "cache", "test")
+	p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: pkgDir, Version: "1.0.0"}}
+	err := resolver.CloneRemotePlugin(&p, cachePath)
+	if err == nil {
+		t.Fatal("expected error for local package with version")
+	}
+}
+
+func TestNpmInstall_VersionResolution(t *testing.T) {
+	installer := &Installer{}
+
+	t.Run("registry package version from source", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "left-pad", Version: "1.3.0"}}
+		ver, err := installer.resolveRemoteVersion(&p, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "1.3.0" {
+			t.Errorf("expected '1.3.0', got '%s'", ver)
+		}
+	})
+
+	t.Run("local path reads package.json version", func(t *testing.T) {
+		pkgDir := t.TempDir()
+		os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"name":"local-pkg","version":"1.0.0"}`), 0644)
+
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: pkgDir}}
+		ver, err := installer.resolveRemoteVersion(&p, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "1.0.0" {
+			t.Errorf("expected '1.0.0', got '%s'", ver)
+		}
+	})
+
+	t.Run("explicit CLI version wins", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "left-pad", Version: "1.3.0"}}
+		ver, err := installer.resolveRemoteVersion(&p, "2.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "2.0.0" {
+			t.Errorf("expected '2.0.0', got '%s'", ver)
+		}
+	})
+
+	t.Run("no version returns latest", func(t *testing.T) {
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "left-pad"}}
+		ver, err := installer.resolveRemoteVersion(&p, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "latest" {
+			t.Errorf("expected 'latest', got '%s'", ver)
+		}
+	})
+}
+
+func TestExtractPackageNameFromSpec(t *testing.T) {
+	tests := []struct {
+		spec     string
+		expected string
+	}{
+		{"left-pad", "left-pad"},
+		{"@scope/name", "@scope/name"},
+		{"simple-pkg", "simple-pkg"},
+	}
+
+	for _, tt := range tests {
+		got := extractPackageNameFromSpec(tt.spec)
+		if got != tt.expected {
+			t.Errorf("extractPackageNameFromSpec(%q) = %q, want %q", tt.spec, got, tt.expected)
+		}
+	}
 }

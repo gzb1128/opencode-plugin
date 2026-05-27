@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -18,16 +19,39 @@ type PluginResolutionContext struct {
 	PluginRoot string
 }
 
+type NPMRunner interface {
+	Install(packageSpec, prefix, registry string) error
+}
+
 type VersionResolver struct {
 	gitClient *GitClient
+	npmRunner NPMRunner
 }
 
 type GitClient struct{}
 
+type productionNPMRunner struct{}
+
+func (r *productionNPMRunner) Install(packageSpec, prefix, registry string) error {
+	args := []string{"install", packageSpec, "--prefix", prefix}
+	if registry != "" {
+		args = append(args, "--registry", registry)
+	}
+	cmd := exec.Command("npm", args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func NewVersionResolver() *VersionResolver {
 	return &VersionResolver{
 		gitClient: &GitClient{},
+		npmRunner: &productionNPMRunner{},
 	}
+}
+
+func (v *VersionResolver) SetNPMRunner(runner NPMRunner) {
+	v.npmRunner = runner
 }
 
 func (v *VersionResolver) Resolve(pluginPath string, requested string) (string, error) {
@@ -153,12 +177,106 @@ func (v *VersionResolver) clonePluginSource(src marketplace.PluginSource, cacheP
 	case *marketplace.GitSubdirSource:
 		return v.cloneGitSubdirSource(s, cachePath)
 	case *marketplace.NpmSource:
-		return fmt.Errorf("npm source installation not yet implemented for package: %s", s.Package)
+		return v.installNpmSource(s, cachePath)
 	case *marketplace.PipSource:
 		return fmt.Errorf("pip source installation not yet implemented for package: %s", s.Package)
 	default:
 		return fmt.Errorf("source type '%s' is not a remote source", src.SourceType())
 	}
+}
+
+func (v *VersionResolver) installNpmSource(src *marketplace.NpmSource, cachePath string) error {
+	if _, err := os.Stat(cachePath); err == nil {
+		os.RemoveAll(cachePath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	isLocal := src.Package != "" && isLocalPath(src.Package)
+
+	var packageSpec string
+	var resolvedName string
+
+	if isLocal {
+		if src.Version != "" {
+			return fmt.Errorf("npm source with local path must not specify version: %s", src.Version)
+		}
+		packageSpec = src.Package
+		var err error
+		resolvedName, err = readPackageNameFromJSON(src.Package)
+		if err != nil {
+			return fmt.Errorf("failed to read package name from local package: %w", err)
+		}
+	} else {
+		packageSpec = src.Package
+		if src.Version != "" {
+			packageSpec = src.Package + "@" + src.Version
+		}
+		resolvedName = extractPackageNameFromSpec(src.Package)
+	}
+
+	npmCacheDir, err := os.MkdirTemp("", "opencode-npm-cache-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir for npm install: %w", err)
+	}
+	defer os.RemoveAll(npmCacheDir)
+
+	if err := v.npmRunner.Install(packageSpec, npmCacheDir, src.Registry); err != nil {
+		return fmt.Errorf("npm install failed: %w", err)
+	}
+
+	installedPath := filepath.Join(npmCacheDir, "node_modules", resolvedName)
+	if _, err := os.Stat(installedPath); os.IsNotExist(err) {
+		return fmt.Errorf("installed package not found at %s", installedPath)
+	}
+
+	if err := copyRecursive(installedPath, cachePath); err != nil {
+		return fmt.Errorf("failed to copy installed package to cache: %w", err)
+	}
+
+	return nil
+}
+
+func isLocalPath(path string) bool {
+	if filepath.IsAbs(path) {
+		return true
+	}
+	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") {
+		return true
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func readPackageNameFromJSON(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return "", fmt.Errorf("failed to read package.json: %w", err)
+	}
+	var pkg struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return "", fmt.Errorf("failed to parse package.json: %w", err)
+	}
+	if pkg.Name == "" {
+		return "", fmt.Errorf("package.json missing name field")
+	}
+	return pkg.Name, nil
+}
+
+func extractPackageNameFromSpec(spec string) string {
+	if strings.HasPrefix(spec, "@") {
+		parts := strings.SplitN(spec, "/", 2)
+		if len(parts) == 2 {
+			scopeAndName := parts[0] + "/" + strings.SplitN(parts[1], "@", 2)[0]
+			return scopeAndName
+		}
+		return spec
+	}
+	return strings.SplitN(spec, "@", 2)[0]
 }
 
 func (v *VersionResolver) cloneGitSource(gitURL, ref, sha, cachePath string) error {
