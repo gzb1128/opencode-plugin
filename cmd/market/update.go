@@ -2,10 +2,12 @@ package market
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/opencode/plugin-cli/internal/config"
 	"github.com/opencode/plugin-cli/internal/marketplace"
+	"github.com/opencode/plugin-cli/internal/plugin"
 	"github.com/spf13/cobra"
 )
 
@@ -79,6 +81,19 @@ func updateMarket(mgr *marketplace.Manager, configMgr *config.Manager, name stri
 
 	fmt.Printf("Updating %s...\n", name)
 
+	var oldIndex *marketplace.Marketplace
+	if installLoc, _ := market["installLocation"].(string); installLoc != "" {
+		oldSource := marketplace.NewMarketSourceFromConfig(market)
+		oldIndexPath, pathErr := marketplace.MarketSourceIndexPath(oldSource)
+		if pathErr == nil {
+			if parsed, parseErr := marketplace.ParseMarketplaceIndex(oldIndexPath); parseErr == nil {
+				oldIndex = parsed
+			} else {
+				log.Printf("Warning: could not parse old marketplace index for %s: %v", name, parseErr)
+			}
+		}
+	}
+
 	source := marketplace.NewMarketSourceFromConfig(market)
 
 	mp, resultSource, err := mgr.AddSource(name, source)
@@ -93,11 +108,62 @@ func updateMarket(mgr *marketplace.Manager, configMgr *config.Manager, name stri
 
 	preserveConfigFields(market, marketCfg)
 
+	if oldIndex != nil && mp.ForceRemoveDeletedPlugins {
+		if err := cleanupDeletedPlugins(configMgr, name, oldIndex, mp); err != nil {
+			log.Printf("Warning: failed to cleanup deleted plugins for %s: %v", name, err)
+		}
+	}
+
 	if err := configMgr.AddKnownMarket(name, marketCfg); err != nil {
 		return fmt.Errorf("failed to update marketplace config: %w", err)
 	}
 
 	fmt.Printf("  %d plugins available\n", len(mp.Plugins))
+	return nil
+}
+
+func cleanupDeletedPlugins(configMgr *config.Manager, marketName string, oldIndex, newIndex *marketplace.Marketplace) error {
+	oldNames := make(map[string]bool)
+	for _, p := range oldIndex.Plugins {
+		oldNames[p.Name] = true
+	}
+
+	newNames := make(map[string]bool)
+	for _, p := range newIndex.Plugins {
+		newNames[p.Name] = true
+	}
+
+	var deleted []string
+	for name := range oldNames {
+		if !newNames[name] {
+			deleted = append(deleted, name)
+		}
+	}
+
+	if len(deleted) == 0 {
+		return nil
+	}
+
+	installer := plugin.NewInstaller(configMgr)
+	installed, err := installer.ListInstalledByMarket(marketName)
+	if err != nil {
+		return fmt.Errorf("failed to list installed plugins: %w", err)
+	}
+
+	installedSet := make(map[string]bool)
+	for _, p := range installed {
+		installedSet[p] = true
+	}
+
+	for _, pluginName := range deleted {
+		if installedSet[pluginName] {
+			fmt.Printf("  Removing deleted plugin: %s@%s\n", pluginName, marketName)
+			if err := installer.Remove(pluginName, marketName); err != nil {
+				log.Printf("Warning: failed to remove deleted plugin %s@%s: %v", pluginName, marketName, err)
+			}
+		}
+	}
+
 	return nil
 }
 

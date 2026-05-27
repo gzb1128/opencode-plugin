@@ -500,3 +500,20 @@ func (i *Installer) List() (map[string][]config.InstallRecord, error) {
 
 	return installed.Plugins, nil
 }
+
+func (i *Installer) ListInstalledByMarket(marketName string) ([]string, error) {
+	installed, err := i.configMgr.LoadInstalledPlugins()
+	if err != nil {
+		return nil, err
+	}
+
+	var pluginNames []string
+	suffix := "@" + marketName
+	for key := range installed.Plugins {
+		if strings.HasSuffix(key, suffix) {
+			pluginName := strings.TrimSuffix(key, suffix)
+			pluginNames = append(pluginNames, pluginName)
+		}
+	}
+	return pluginNames, nil
+}
