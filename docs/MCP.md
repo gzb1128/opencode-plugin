@@ -1,13 +1,14 @@
 # MCP (Model Context Protocol) Support
 
-OpenCode Plugin CLI provides full support for MCP servers, allowing plugins to integrate with external services.
+OpenCode Plugin CLI can install MCP server configuration from plugins, allowing
+plugins to register external tool servers with OpenCode.
 
 ## What is MCP?
 
 MCP (Model Context Protocol) is a protocol that enables Claude Code plugins to:
 - Connect to external services (databases, APIs, file systems)
 - Provide structured tool access within Claude Code
-- Bundle MCP servers with plugins for automatic setup
+- Bundle MCP server configuration with plugins
 
 ## MCP Server Types
 
@@ -192,50 +193,51 @@ MCP Server: github.github
 
 Type: http
 URL: https://api.githubcopilot.com/mcp/
-Environment Variables:
-  Authorization=Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}
 ```
 
 ## Installation
 
-MCP servers are installed automatically when you install a plugin:
+MCP server configuration is registered when you install a plugin that defines
+MCP servers:
 
 ```bash
 # Install plugin with MCP servers
 opencode-plugin plugin install github
 
 # Output:
-✓ Successfully installed plugin: github
-  From marketplace: anthropics/claude-plugins-official
-  Cache: ~/.opencode-plugin-cli/cache/anthropics/claude-plugins-official/github/latest
-  Skills: 0, Commands: 0, Agents: 0
-  MCP Servers: 1  # ← MCP servers installed
+✓ Successfully installed plugin: github@latest
+  From marketplace: claude-plugins-official
+  Cache: ~/.opencode-plugin-cli/cache/claude-plugins-official/github/latest
+  Skills: 0
+  MCP Servers: 1
 ```
 
-The MCP configuration is merged into `~/.config/opencode/.mcp.json`.
+The MCP configuration is merged into the `mcp` section of
+`~/.config/opencode/opencode.json`.
 
 ## Uninstallation
 
-When you remove a plugin, its MCP servers are also removed:
+When you remove a plugin, its MCP config entries are also removed:
 
 ```bash
 opencode-plugin plugin remove github
 
 # Output:
-✓ Removed MCP servers: github.github
+✓ Removed cache: ~/.opencode-plugin-cli/cache/claude-plugins-official/github/latest
 ✓ Successfully removed plugin: github (0 symlinks removed)
 ```
 
 ## MCP Server Conflicts
 
-If multiple plugins define MCP servers with the same name, OpenCode Plugin CLI prefixes them with the plugin name:
+OpenCode Plugin CLI prefixes installed MCP server names with the plugin name:
 
 ```
 plugin-a.database
 plugin-b.database
 ```
 
-This ensures no conflicts between plugins.
+This avoids collisions between different plugin prefixes. Plugins with the same
+plugin name still share the same MCP prefix.
 
 ## Real-World Examples
 
@@ -248,11 +250,14 @@ This ensures no conflicts between plugins.
     "type": "http",
     "url": "https://api.githubcopilot.com/mcp/",
     "headers": {
-      "Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      "Authorization": "Bearer <github-token>"
     }
   }
 }
 ```
+
+Header values are copied as written. The CLI does not substitute variables in
+`headers`.
 
 ### Playwright Plugin
 
@@ -285,9 +290,13 @@ This ensures no conflicts between plugins.
 
 For MCP servers that require OAuth or complex authentication:
 
-1. **Environment Variables**: Use `${VAR_NAME}` syntax
-2. **Configuration Files**: Bundle config files in plugin
-3. **Interactive Setup**: Plugin can prompt for credentials on first use
+1. **Environment variables**: Provide explicit `env` values for local servers.
+2. **Configuration files**: Bundle config files in the plugin.
+3. **Interactive setup**: Let the server prompt for credentials on first use.
+
+The CLI only substitutes `${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_NAME}`, and
+`${PLUGIN_VERSION}`. It does not expand arbitrary shell variables such as
+`${GITHUB_TOKEN}`.
 
 **Example:**
 ```json
@@ -295,8 +304,8 @@ For MCP servers that require OAuth or complex authentication:
   "github": {
     "command": "${CLAUDE_PLUGIN_ROOT}/servers/github-mcp",
     "env": {
-      "GITHUB_TOKEN": "${GITHUB_TOKEN}",
-      "GITHUB_ORG": "${GITHUB_ORG:-myorg}"
+      "GITHUB_TOKEN": "<token>",
+      "GITHUB_ORG": "myorg"
     }
   }
 }
@@ -341,10 +350,11 @@ If MCP servers have versions, track them in plugin.json.
 
 ### Conflicts between plugins
 
-MCP servers are automatically prefixed with plugin name to avoid conflicts.
+MCP servers are prefixed as `pluginName.serverName`. Plugins with the same
+plugin name still share a prefix.
 
 ## See Also
 
-- [Plugin Development Guide](docs/PLUGIN_DEVELOPMENT.md)
+- [Plugin design notes](design/PLUGIN.md)
 - [MCP Integration Skill](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/plugin-dev/skills/mcp-integration)
-- [OpenCode Plugin CLI README](README.md)
+- [OpenCode Plugin CLI README](../README.md)
