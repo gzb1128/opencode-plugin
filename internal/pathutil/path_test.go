@@ -49,6 +49,22 @@ func TestResolvePathWithinBase(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects symlink to base parent for missing child", func(t *testing.T) {
+		parent := t.TempDir()
+		base := filepath.Join(parent, "base")
+		if err := os.MkdirAll(base, 0755); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		linkDir := filepath.Join(base, "link")
+		if err := os.Symlink(parent, linkDir); err != nil {
+			t.Skipf("symlinks not supported: %v", err)
+		}
+		_, err := ResolvePathWithinBase(base, "link/escaped/new-file")
+		if err == nil {
+			t.Fatal("expected error for symlink to base parent")
+		}
+	})
+
 	t.Run("allows existing file within base", func(t *testing.T) {
 		base := t.TempDir()
 		file := filepath.Join(base, "real.txt")

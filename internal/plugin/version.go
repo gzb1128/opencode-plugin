@@ -3,6 +3,7 @@ package plugin
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -243,11 +244,10 @@ func isLocalPath(path string) bool {
 	if filepath.IsAbs(path) {
 		return true
 	}
-	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") {
+	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") || strings.HasPrefix(path, "~/") {
 		return true
 	}
-	_, err := os.Stat(path)
-	return err == nil
+	return false
 }
 
 func readPackageNameFromJSON(dir string) (string, error) {
@@ -408,19 +408,36 @@ func copyRecursive(src, dst string) error {
 		if entry.Name() == ".git" {
 			continue
 		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 
-		if entry.IsDir() {
+		if info.IsDir() {
 			if err := copyRecursive(srcPath, dstPath); err != nil {
 				return err
 			}
 		} else {
-			data, err := os.ReadFile(srcPath)
+			in, err := os.Open(srcPath)
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+			out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+			if err != nil {
+				in.Close()
+				return err
+			}
+			_, err = io.Copy(out, in)
+			in.Close()
+			out.Close()
+			if err != nil {
 				return err
 			}
 		}

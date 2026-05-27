@@ -181,6 +181,24 @@ func TestLinker_CommandsInlineContent(t *testing.T) {
 	}
 }
 
+func TestLinker_DefaultComponentDirRejectsSymlinkEscape(t *testing.T) {
+	linker, _, pluginPath := setupLinkerTest(t)
+
+	outside := t.TempDir()
+	skillsDir := filepath.Join(pluginPath, "skills")
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(skillsDir, "evil")); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	_, err := linker.CreateSymlinks(pluginPath)
+	if err == nil {
+		t.Fatal("expected error for symlink escaping plugin root")
+	}
+}
+
 func TestLinker_RemoveSymlinks(t *testing.T) {
 	linker, agentsDir, pluginPath := setupLinkerTest(t)
 
@@ -312,8 +330,16 @@ func assertSymlink(t *testing.T, linkPath, expectedTarget string) {
 
 	absTarget, _ := filepath.Abs(target)
 	absExpected, _ := filepath.Abs(expectedTarget)
-	if absTarget != absExpected {
-		t.Errorf("symlink %s target = %s, want %s", linkPath, absTarget, absExpected)
+	evTarget, _ := filepath.EvalSymlinks(absTarget)
+	if evTarget == "" {
+		evTarget = absTarget
+	}
+	evExpected, _ := filepath.EvalSymlinks(absExpected)
+	if evExpected == "" {
+		evExpected = absExpected
+	}
+	if evTarget != evExpected {
+		t.Errorf("symlink %s target = %s, want %s", linkPath, evTarget, evExpected)
 	}
 }
 

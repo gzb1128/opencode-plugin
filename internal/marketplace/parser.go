@@ -9,10 +9,9 @@ import (
 )
 
 var (
-	nonASCII          = regexp.MustCompile(`[^\x20-\x7E]`)
-	shaRegex          = regexp.MustCompile(`^[a-f0-9]{7,40}$`)
-	depSegmentRegex   = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-	versionConstraint = regexp.MustCompile(`^[\^~>=<*vV0-9].*$`)
+	nonASCII        = regexp.MustCompile(`[^\x20-\x7E]`)
+	shaRegex        = regexp.MustCompile(`^[a-f0-9]{7,40}$`)
+	depSegmentRegex = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 )
 
 func ParseMarketplaceIndex(path string) (*Marketplace, error) {
@@ -271,12 +270,7 @@ func parseDependencyString(s string) (string, error) {
 		if err := validateDepSegment(name); err != nil {
 			return "", err
 		}
-		rest := parts[1]
-		if versionConstraint.MatchString(rest) {
-			return name, nil
-		}
-		subParts := strings.Split(rest, "@")
-		market := subParts[0]
+		market := parts[1]
 		if err := validateDepSegment(market); err != nil {
 			return "", err
 		}
@@ -288,6 +282,10 @@ func parseDependencyString(s string) (string, error) {
 		}
 		market := parts[1]
 		if err := validateDepSegment(market); err != nil {
+			return "", err
+		}
+		version := parts[2]
+		if err := validateDepVersion(version); err != nil {
 			return "", err
 		}
 		return name + "@" + market, nil
@@ -308,6 +306,19 @@ func validateDepSegment(s string) error {
 	}
 	if !depSegmentRegex.MatchString(s) {
 		return fmt.Errorf("dependency segment contains invalid characters: %q", s)
+	}
+	return nil
+}
+
+func validateDepVersion(s string) error {
+	if s == "" {
+		return fmt.Errorf("dependency version must not be empty")
+	}
+	if strings.Contains(s, "/") || strings.Contains(s, "\\") {
+		return fmt.Errorf("dependency version must not contain '/' or '\\': %q", s)
+	}
+	if strings.Contains(s, "..") {
+		return fmt.Errorf("dependency version must not contain '..': %q", s)
 	}
 	return nil
 }

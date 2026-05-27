@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/opencode/plugin-cli/internal/pathutil"
 )
 
 type Linker struct {
@@ -106,7 +108,10 @@ func (l *Linker) linkComponentDir(pluginPath, component string) (int, []string, 
 	count := 0
 
 	for _, file := range files {
-		srcPath := filepath.Join(srcDir, file.Name())
+		srcPath, err := pathutil.ResolvePathWithinBase(pluginPath, filepath.Join(component, file.Name()))
+		if err != nil {
+			return 0, conflicts, fmt.Errorf("component source path escapes plugin root: %w", err)
+		}
 		linkPath := filepath.Join(targetDir, file.Name())
 
 		if _, err := os.Lstat(linkPath); err == nil {
@@ -151,8 +156,13 @@ func (l *Linker) linkComponentPaths(pluginPath, component string, paths []Compon
 
 	for _, cp := range paths {
 		resolvedSrc := cp.Path
-		if !filepath.IsAbs(resolvedSrc) {
-			resolvedSrc = filepath.Join(pluginPath, resolvedSrc)
+		if filepath.IsAbs(resolvedSrc) {
+			return 0, conflicts, fmt.Errorf("component source path must not be absolute: %s", resolvedSrc)
+		}
+		var err error
+		resolvedSrc, err = pathutil.ResolvePathWithinBase(pluginPath, resolvedSrc)
+		if err != nil {
+			return 0, conflicts, fmt.Errorf("component source path escapes plugin root: %w", err)
 		}
 
 		if _, err := os.Stat(resolvedSrc); os.IsNotExist(err) {
@@ -160,6 +170,9 @@ func (l *Linker) linkComponentPaths(pluginPath, component string, paths []Compon
 		}
 
 		linkName := cp.Name
+		if err := validateLinkName(linkName); err != nil {
+			return 0, conflicts, fmt.Errorf("invalid link name %q: %w", linkName, err)
+		}
 		linkPath := filepath.Join(targetDir, linkName)
 
 		if _, err := os.Lstat(linkPath); err == nil {
@@ -302,6 +315,9 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 
 	count := 0
 	absPluginPath, _ := filepath.Abs(pluginPath)
+	if evaluatedPluginPath, err := filepath.EvalSymlinks(absPluginPath); err == nil {
+		absPluginPath = evaluatedPluginPath
+	}
 
 	for _, file := range files {
 		linkPath := filepath.Join(componentDir, file.Name())
@@ -316,6 +332,9 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 		}
 
 		absLinkTarget, _ := filepath.Abs(linkTarget)
+		if evaluatedLinkTarget, err := filepath.EvalSymlinks(absLinkTarget); err == nil {
+			absLinkTarget = evaluatedLinkTarget
+		}
 		rel, err := filepath.Rel(absPluginPath, absLinkTarget)
 		if err != nil {
 			continue
@@ -353,4 +372,14 @@ func isSymlink(path string) bool {
 		return false
 	}
 	return info.Mode()&os.ModeSymlink != 0
+}
+
+func validateLinkName(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return fmt.Errorf("link name must not be empty, '.', or '..'")
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("link name must not contain path separators")
+	}
+	return nil
 }

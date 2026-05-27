@@ -14,16 +14,14 @@ import (
 func setupInstallerTest(t *testing.T) (*Installer, string) {
 	t.Helper()
 
-	paths := config.DefaultPaths()
+	tmpDir := t.TempDir()
+	paths := config.TestEnvironment(tmpDir).Paths()
 	os.MkdirAll(paths.BaseDir, 0755)
 	os.MkdirAll(paths.MarketsDir, 0755)
 	os.MkdirAll(paths.CacheDir, 0755)
 	os.MkdirAll(paths.AgentsDir, 0755)
 
-	mgr, err := config.NewManager()
-	if err != nil {
-		t.Fatalf("failed to create config manager: %v", err)
-	}
+	mgr := config.NewManagerWithPath(paths)
 
 	installer := &Installer{
 		resolver:   NewVersionResolver(),
@@ -176,4 +174,37 @@ func TestInstall_DependencyAlreadyInstalled(t *testing.T) {
 
 	installer.configMgr.RemoveInstallRecord("dep@test-market")
 	installer.configMgr.RemoveInstallRecord("root@test-market")
+}
+
+func TestIsWithinDir(t *testing.T) {
+	cacheDir := t.TempDir()
+	innerDir := filepath.Join(cacheDir, "plugin@market", "v1")
+	os.MkdirAll(innerDir, 0755)
+
+	t.Run("path inside cache dir", func(t *testing.T) {
+		if !isWithinDir(innerDir, cacheDir) {
+			t.Error("expected inner dir to be within cache")
+		}
+	})
+
+	t.Run("path outside cache dir rejected", func(t *testing.T) {
+		if isWithinDir(t.TempDir(), cacheDir) {
+			t.Error("external dir should be rejected")
+		}
+	})
+
+	t.Run("cache dir itself rejected", func(t *testing.T) {
+		if isWithinDir(cacheDir, cacheDir) {
+			t.Error("cache dir itself should be rejected (must be a child)")
+		}
+	})
+
+	t.Run("symlink pointing outside cache rejected", func(t *testing.T) {
+		outsideDir := t.TempDir()
+		linkPath := filepath.Join(cacheDir, "escape")
+		os.Symlink(outsideDir, linkPath)
+		if isWithinDir(linkPath, cacheDir) {
+			t.Error("symlink pointing outside cache should be rejected")
+		}
+	})
 }

@@ -597,6 +597,32 @@ func TestNpmInstall_VersionResolution(t *testing.T) {
 			t.Errorf("expected 'latest', got '%s'", ver)
 		}
 	})
+
+	t.Run("registry package name matching cwd directory is not local", func(t *testing.T) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("Getwd() error = %v", err)
+		}
+		tmp := t.TempDir()
+		if err := os.Mkdir(filepath.Join(tmp, "left-pad"), 0755); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := os.Chdir(tmp); err != nil {
+			t.Fatalf("Chdir() error = %v", err)
+		}
+		t.Cleanup(func() {
+			_ = os.Chdir(cwd)
+		})
+
+		p := marketplace.Plugin{Source: &marketplace.NpmSource{Package: "left-pad", Version: "1.3.0"}}
+		ver, err := installer.resolveRemoteVersion(&p, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ver != "1.3.0" {
+			t.Errorf("expected '1.3.0', got '%s'", ver)
+		}
+	})
 }
 
 func TestExtractPackageNameFromSpec(t *testing.T) {

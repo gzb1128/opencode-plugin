@@ -90,10 +90,12 @@ func (b *marketSourceBase) SetInstallLocation(loc string) { b.installLocation = 
 
 type GitHubMarketSource struct {
 	marketSourceBase
-	Repo        string
-	URL         string
-	Ref         string
-	Path        string
+	Repo string
+	URL  string
+	Ref  string
+	Path string
+	// SparsePaths is parsed and preserved for Claude Code marketplace config compatibility.
+	// Runtime sparse checkout is intentionally deferred.
 	SparsePaths []string
 }
 
@@ -101,9 +103,11 @@ func (s *GitHubMarketSource) SourceType() string { return string(SourceTypeGitHu
 
 type GitMarketSource struct {
 	marketSourceBase
-	URL         string
-	Ref         string
-	Path        string
+	URL  string
+	Ref  string
+	Path string
+	// SparsePaths is parsed and preserved for Claude Code marketplace config compatibility.
+	// Runtime sparse checkout is intentionally deferred.
 	SparsePaths []string
 }
 

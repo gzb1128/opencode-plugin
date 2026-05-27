@@ -12,11 +12,11 @@ import (
 
 func newTestConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
-	mgr, err := config.NewManager()
-	if err != nil {
-		t.Fatalf("failed to create config manager: %v", err)
-	}
-	return mgr
+	tmpDir := t.TempDir()
+	paths := config.TestEnvironment(tmpDir).Paths()
+	os.MkdirAll(paths.BaseDir, 0755)
+	os.MkdirAll(paths.CacheDir, 0755)
+	return config.NewManagerWithPath(paths)
 }
 
 func TestMaterializePlugin_LocalWithFallbackManifest(t *testing.T) {

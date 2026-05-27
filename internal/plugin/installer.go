@@ -3,6 +3,7 @@ package plugin
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,7 +112,6 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 		parts := strings.SplitN(id, "@", 2)
 		depOpts := InstallOptions{
 			MarketName: parts[1],
-			Version:    opts.Version,
 			Scope:      opts.Scope,
 		}
 		if err := i.installOneResolvedPlugin(rp, depOpts); err != nil {
@@ -274,63 +274,47 @@ func (i *Installer) findPlugin(markets map[string]map[string]interface{}, plugin
 }
 
 func (i *Installer) copyPluginToCache(src, dst string) error {
+	return copyDirTree(src, dst, map[string]bool{".git": true})
+}
+
+func (i *Installer) copyDir(src, dst string) error {
+	return copyDirTree(src, dst, nil)
+}
+
+func copyDirTree(src, dst string, skip map[string]bool) error {
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return err
 	}
 
 	entries, err := os.ReadDir(src)
 	if err != nil {
-		return fmt.Errorf("failed to read source directory: %w", err)
-	}
-
-	skipItems := map[string]bool{
-		".git": true,
+		return err
 	}
 
 	for _, entry := range entries {
 		name := entry.Name()
+		if skip != nil && skip[name] {
+			continue
+		}
 
-		if skipItems[name] {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
 			continue
 		}
 
 		srcPath := filepath.Join(src, name)
 		dstPath := filepath.Join(dst, name)
 
-		if entry.IsDir() {
-			if err := i.copyDir(srcPath, dstPath); err != nil {
-				return fmt.Errorf("failed to copy directory %s: %w", name, err)
-			}
-		} else {
-			if err := i.copyFile(srcPath, dstPath); err != nil {
-				return fmt.Errorf("failed to copy file %s: %w", name, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-func (i *Installer) copyDir(src, dst string) error {
-	if err := os.MkdirAll(dst, 0755); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			if err := i.copyDir(srcPath, dstPath); err != nil {
+		if info.IsDir() {
+			if err := copyDirTree(srcPath, dstPath, skip); err != nil {
 				return err
 			}
 		} else {
-			if err := i.copyFile(srcPath, dstPath); err != nil {
+			if err := copyFilePreserveMode(srcPath, dstPath, info.Mode()); err != nil {
 				return err
 			}
 		}
@@ -339,12 +323,23 @@ func (i *Installer) copyDir(src, dst string) error {
 	return nil
 }
 
-func (i *Installer) copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
+func copyFilePreserveMode(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0644)
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (i *Installer) materializePlugin(resolved *marketplace.ResolvedPlugin, opts InstallOptions) (*MaterializedPlugin, error) {
@@ -501,7 +496,13 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 		return fmt.Errorf("plugin %s not found", key)
 	}
 
-	count, err := i.linker.RemoveSymlinks(record.InstallPath)
+	installPath := record.InstallPath
+	cacheDir := i.configMgr.GetPaths().CacheDir
+	if !isWithinDir(installPath, cacheDir) {
+		return fmt.Errorf("refusing to remove path %q outside cache directory %q", installPath, cacheDir)
+	}
+
+	count, err := i.linker.RemoveSymlinks(installPath)
 	if err != nil {
 		fmt.Printf("⚠️  Error removing symlinks: %v\n", err)
 	}
@@ -510,10 +511,10 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 		fmt.Printf("⚠️  Warning: Failed to uninstall MCP servers: %v\n", err)
 	}
 
-	if err := os.RemoveAll(record.InstallPath); err != nil {
+	if err := os.RemoveAll(installPath); err != nil {
 		fmt.Printf("⚠️  Failed to remove cache: %v\n", err)
 	} else {
-		fmt.Printf("✓ Removed cache: %s\n", record.InstallPath)
+		fmt.Printf("✓ Removed cache: %s\n", installPath)
 	}
 
 	if err := i.configMgr.RemoveInstallRecord(key); err != nil {
@@ -523,6 +524,30 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 	fmt.Printf("✓ Successfully removed plugin: %s (%d symlinks removed)\n", pluginName, count)
 
 	return nil
+}
+
+func isWithinDir(path, base string) bool {
+	absPath, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	absBase, err := filepath.Abs(filepath.Clean(base))
+	if err != nil {
+		return false
+	}
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(absPath, absBase+sep) {
+		return false
+	}
+	evalPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return false
+	}
+	evalBase, err := filepath.EvalSymlinks(absBase)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(evalPath, evalBase+sep)
 }
 
 func (i *Installer) List() (map[string][]config.InstallRecord, error) {

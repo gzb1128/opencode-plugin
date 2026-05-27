@@ -61,7 +61,7 @@ func ResolvePathWithinBase(basePath, relativePath string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("failed to evaluate symlink %s: %w", dir, err)
 			}
-			if !isWithinBase(target, evalBase) && !isAncestorOf(target, evalBase) {
+			if !isWithinBase(target, evalBase) {
 				return "", fmt.Errorf("symlink target %s escapes base %s", target, evalBase)
 			}
 		}
@@ -114,10 +114,6 @@ func SafePluginCachePath(cacheDir, pluginID, version string) (string, error) {
 
 func isWithinBase(path, base string) bool {
 	return strings.HasPrefix(path, base+string(filepath.Separator)) || path == base
-}
-
-func isAncestorOf(candidate, descendant string) bool {
-	return strings.HasPrefix(descendant, candidate+string(filepath.Separator))
 }
 
 func sanitizeAlias(alias string) string {

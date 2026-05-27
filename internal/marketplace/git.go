@@ -2,7 +2,6 @@ package marketplace
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -12,8 +11,7 @@ import (
 )
 
 type CloneOptions struct {
-	Ref         string
-	SparsePaths []string
+	Ref string
 }
 
 type GitClient struct {
@@ -77,6 +75,39 @@ func (g *GitClient) Checkout(repoPath, ref string) error {
 	}
 
 	return nil
+}
+
+func (g *GitClient) checkoutRemoteRef(repoPath, ref string) error {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	worktree, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	candidates := []plumbing.Revision{
+		plumbing.Revision(fmt.Sprintf("refs/remotes/origin/%s", ref)),
+		plumbing.Revision(fmt.Sprintf("refs/tags/%s", ref)),
+		plumbing.Revision(ref),
+	}
+
+	var lastErr error
+	for _, rev := range candidates {
+		hash, err := repo.ResolveRevision(rev)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := worktree.Checkout(&git.CheckoutOptions{Hash: *hash}); err != nil {
+			return fmt.Errorf("failed to checkout %s: %w", ref, err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("failed to resolve ref %s: %w", ref, lastErr)
 }
 
 func (g *GitClient) Pull(repoPath string) error {
@@ -152,7 +183,7 @@ func (g *GitClient) CloneOrPullWithOptions(url, path string, opts CloneOptions) 
 		if err := g.fetchRef(repo, url, opts.Ref); err != nil {
 			return fmt.Errorf("failed to fetch ref %s: %w", opts.Ref, err)
 		}
-		return g.Checkout(path, opts.Ref)
+		return g.checkoutRemoteRef(path, opts.Ref)
 	}
 
 	worktree, err := repo.Worktree()
@@ -190,43 +221,15 @@ func (g *GitClient) fetchRef(repo *git.Repository, remoteURL, ref string) error 
 		return fmt.Errorf("no remote found in repository")
 	}
 
-	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", ref, ref)
+	refSpecs := []config.RefSpec{
+		config.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", ref, ref)),
+		config.RefSpec(fmt.Sprintf("+refs/tags/%s:refs/tags/%s", ref, ref)),
+	}
 	err = remote.Fetch(&git.FetchOptions{
-		RefSpecs: []config.RefSpec{
-			config.RefSpec(refSpec),
-		},
+		RefSpecs: refSpecs,
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		return err
 	}
 	return nil
-}
-
-func (g *GitClient) FetchSubDir(url, subPath, ref, targetPath string) error {
-	tempDir, err := os.MkdirTemp("", "opencode-plugin-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	if err := g.Clone(url, tempDir); err != nil {
-		return err
-	}
-
-	if ref != "" {
-		if err := g.Checkout(tempDir, ref); err != nil {
-			return err
-		}
-	}
-
-	srcPath := fmt.Sprintf("%s/%s", tempDir, subPath)
-	if err := copyDir(srcPath, targetPath); err != nil {
-		return fmt.Errorf("failed to copy subdirectory: %w", err)
-	}
-
-	return nil
-}
-
-func copyDir(src, dst string) error {
-	return os.Rename(src, dst)
 }

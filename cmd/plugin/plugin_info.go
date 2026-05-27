@@ -68,7 +68,14 @@ Examples:
 
 		// Get plugin path
 		resolver := plugin.NewVersionResolver()
-		pluginPath, err := resolver.GetPluginSourcePath(p, market.InstallLocation())
+		pluginRoot := ""
+		if resolved.Marketplace != nil && resolved.Marketplace.Metadata != nil {
+			pluginRoot = resolved.Marketplace.Metadata.PluginRoot
+		}
+		pluginPath, err := resolver.GetPluginSourcePathWithCtx(p, plugin.PluginResolutionContext{
+			MarketPath: market.InstallLocation(),
+			PluginRoot: pluginRoot,
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

@@ -45,10 +45,18 @@ func (m *Manager) AddSource(name string, source MarketSource) (*Marketplace, Mar
 
 	switch s := source.(type) {
 	case *GitHubMarketSource, *GitMarketSource:
+		safeDir, err := pathutil.SafeMarketplaceCachePath(m.marketsDir, name, "")
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid marketplace name %q: %w", name, err)
+		}
+		if source.InstallLocation() != "" && isWithinMarketsDir(source.InstallLocation(), m.marketsDir) {
+			marketDir = source.InstallLocation()
+		} else {
+			marketDir = safeDir
+		}
 		cloneURL := GetMarketSourceURL(source)
 		opts := CloneOptions{
-			Ref:         GetMarketSourceRef(source),
-			SparsePaths: GetMarketSourceSparsePaths(source),
+			Ref: GetMarketSourceRef(source),
 		}
 		if err := m.gitClient.CloneOrPullWithOptions(cloneURL, marketDir, opts); err != nil {
 			return nil, nil, fmt.Errorf("failed to clone/pull repository: %w", err)
@@ -269,8 +277,11 @@ func (m *Manager) ResolvePlugin(markets map[string]MarketSource, pluginName, mar
 }
 
 func (m *Manager) Remove(name string) error {
-	paths := m.marketsDir
-	marketDir := filepath.Join(paths, name)
+	safeDir, err := pathutil.SafeMarketplaceCachePath(m.marketsDir, name, "")
+	if err != nil {
+		return nil
+	}
+	marketDir := safeDir
 
 	if _, err := os.Stat(marketDir); os.IsNotExist(err) {
 		return nil
@@ -318,15 +329,19 @@ func isWithinMarketsDir(path, marketsDir string) bool {
 	if err != nil {
 		return false
 	}
-	evalPath := absPath
-	if ev, err := filepath.EvalSymlinks(absPath); err == nil {
-		evalPath = ev
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(absPath, absBase+sep) {
+		return false
 	}
-	evalBase := absBase
-	if ev, err := filepath.EvalSymlinks(absBase); err == nil {
-		evalBase = ev
+	evalPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return false
 	}
-	return (strings.HasPrefix(evalPath, evalBase+string(filepath.Separator)) || strings.HasPrefix(absPath, absBase+string(filepath.Separator))) && absPath != absBase
+	evalBase, err := filepath.EvalSymlinks(absBase)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(evalPath, evalBase+sep)
 }
 
 func MarketSourceIndexPath(source MarketSource) (string, error) {

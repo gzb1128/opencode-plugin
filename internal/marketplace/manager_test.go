@@ -646,3 +646,46 @@ func TestGetMarketSourceSparsePaths(t *testing.T) {
 		}
 	})
 }
+
+func TestIsWithinMarketsDir(t *testing.T) {
+	marketsDir := t.TempDir()
+	innerDir := filepath.Join(marketsDir, "inner")
+	os.MkdirAll(innerDir, 0755)
+
+	t.Run("path inside marketsDir", func(t *testing.T) {
+		if !isWithinMarketsDir(innerDir, marketsDir) {
+			t.Error("expected inner dir to be within marketsDir")
+		}
+	})
+
+	t.Run("path is marketsDir itself rejected", func(t *testing.T) {
+		if isWithinMarketsDir(marketsDir, marketsDir) {
+			t.Error("marketsDir itself should be rejected")
+		}
+	})
+
+	t.Run("path outside marketsDir rejected", func(t *testing.T) {
+		if isWithinMarketsDir(t.TempDir(), marketsDir) {
+			t.Error("external dir should be rejected")
+		}
+	})
+
+	t.Run("symlink pointing outside marketsDir rejected", func(t *testing.T) {
+		outsideDir := t.TempDir()
+		linkPath := filepath.Join(marketsDir, "escape-link")
+		os.Symlink(outsideDir, linkPath)
+		if isWithinMarketsDir(linkPath, marketsDir) {
+			t.Error("symlink pointing outside marketsDir should be rejected")
+		}
+	})
+
+	t.Run("symlink pointing inside marketsDir allowed", func(t *testing.T) {
+		targetDir := filepath.Join(marketsDir, "real-target")
+		os.MkdirAll(targetDir, 0755)
+		linkPath := filepath.Join(marketsDir, "good-link")
+		os.Symlink(targetDir, linkPath)
+		if !isWithinMarketsDir(linkPath, marketsDir) {
+			t.Error("symlink pointing inside marketsDir should be allowed")
+		}
+	})
+}

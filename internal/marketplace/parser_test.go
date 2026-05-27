@@ -180,7 +180,7 @@ func TestParseDependencies_StringForm(t *testing.T) {
       "name": "root",
       "description": "Root plugin",
       "source": "./plugins/root",
-      "dependencies": ["dep", "other@shared", "range@shared@^1.2.0"]
+	      "dependencies": ["dep", "other@shared", "range@shared@^1.2.0", "dep@v2", "dep@2026"]
     }
   ]
 }`
@@ -200,7 +200,7 @@ func TestParseDependencies_StringForm(t *testing.T) {
 	}
 
 	deps := mp.Plugins[0].Dependencies
-	want := []string{"dep", "other@shared", "range@shared"}
+	want := []string{"dep", "other@shared", "range@shared", "dep@v2", "dep@2026"}
 	if len(deps) != len(want) {
 		t.Fatalf("Dependencies = %v, want %v", deps, want)
 	}
@@ -262,6 +262,8 @@ func TestParseDependencyRef_Errors(t *testing.T) {
 		{"backslash in name", "foo\\bar", "must not contain '/'"},
 		{"dot dot in name", "foo..bar", "must not contain '..'"},
 		{"too many at segments", "a@b@c@d", "too many '@' segments"},
+		{"three-part empty version", "a@b@", "version must not be empty"},
+		{"three-part slash version", "a@b@../evil", "must not contain"},
 	}
 
 	for _, tt := range tests {
