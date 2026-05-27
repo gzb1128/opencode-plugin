@@ -128,7 +128,12 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 		return err
 	}
 
-	counts, err := i.linker.CreateSymlinks(mat.Path)
+	var manifest map[string]interface{}
+	if mat.ManifestPath != "" {
+		manifest, _ = opencode.ReadManifest(mat.ManifestPath)
+	}
+
+	counts, err := i.linker.CreateSymlinksFromManifest(mat.Path, manifest)
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", err)
 	}
@@ -153,7 +158,15 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 	fmt.Printf("✓ Successfully installed plugin: %s@%s\n", resolved.Plugin.Name, mat.Version)
 	fmt.Printf("  From marketplace: %s\n", opts.MarketName)
 	fmt.Printf("  Cache: %s\n", mat.Path)
-	fmt.Printf("  Skills: %d\n", counts.Skills)
+	if counts.Skills > 0 {
+		fmt.Printf("  Skills: %d\n", counts.Skills)
+	}
+	if counts.Commands > 0 {
+		fmt.Printf("  Commands: %d\n", counts.Commands)
+	}
+	if counts.Agents > 0 {
+		fmt.Printf("  Agents: %d\n", counts.Agents)
+	}
 	if mcpCount > 0 {
 		fmt.Printf("  MCP Servers: %d\n", mcpCount)
 	}
