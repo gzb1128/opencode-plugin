@@ -299,7 +299,7 @@ func copyDirTree(src, dst string, skip map[string]bool) error {
 
 		info, err := entry.Info()
 		if err != nil {
-			continue
+			return fmt.Errorf("failed to stat %s: %w", name, err)
 		}
 
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -539,15 +539,35 @@ func isWithinDir(path, base string) bool {
 	if !strings.HasPrefix(absPath, absBase+sep) {
 		return false
 	}
-	evalPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		return false
-	}
 	evalBase, err := filepath.EvalSymlinks(absBase)
 	if err != nil {
 		return false
 	}
-	return strings.HasPrefix(evalPath, evalBase+sep)
+	evalPath, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		return strings.HasPrefix(evalPath, evalBase+sep)
+	}
+	if !os.IsNotExist(err) {
+		return false
+	}
+	dir := absPath
+	for len(dir) > len(absBase) {
+		dir = filepath.Dir(dir)
+		info, err := os.Lstat(dir)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := filepath.EvalSymlinks(dir)
+			if err != nil {
+				return false
+			}
+			if !strings.HasPrefix(target, evalBase+sep) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (i *Installer) List() (map[string][]config.InstallRecord, error) {

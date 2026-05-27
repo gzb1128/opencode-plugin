@@ -411,7 +411,7 @@ func copyRecursive(src, dst string) error {
 
 		info, err := entry.Info()
 		if err != nil {
-			continue
+			return fmt.Errorf("failed to stat %s: %w", entry.Name(), err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			continue

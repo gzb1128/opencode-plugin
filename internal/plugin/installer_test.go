@@ -207,4 +207,21 @@ func TestIsWithinDir(t *testing.T) {
 			t.Error("symlink pointing outside cache should be rejected")
 		}
 	})
+
+	t.Run("nonexistent path lexically inside cache allowed", func(t *testing.T) {
+		deletedPath := filepath.Join(cacheDir, "deleted-plugin", "v1")
+		if !isWithinDir(deletedPath, cacheDir) {
+			t.Error("nonexistent path lexically inside cache should be allowed")
+		}
+	})
+
+	t.Run("nonexistent path under symlink parent pointing outside rejected", func(t *testing.T) {
+		outsideDir := t.TempDir()
+		linkPath := filepath.Join(cacheDir, "link-outside")
+		os.Symlink(outsideDir, linkPath)
+		missingPath := filepath.Join(linkPath, "missing", "v1")
+		if isWithinDir(missingPath, cacheDir) {
+			t.Error("nonexistent path under symlink escaping cache should be rejected")
+		}
+	})
 }

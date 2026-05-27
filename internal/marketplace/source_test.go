@@ -12,7 +12,6 @@ func TestParseMarketplaceSource(t *testing.T) {
 		name     string
 		url      string
 		wantType string
-		setup    func() string // returns cleanup path
 	}{
 		{
 			name:     "GitHub shorthand format",
@@ -58,16 +57,22 @@ func TestParseMarketplaceSource(t *testing.T) {
 		})
 	}
 
-	t.Run("local directory path", func(t *testing.T) {
-		tmpDir := filepath.Join(t.TempDir(), "test-market")
-		os.MkdirAll(tmpDir, 0755)
+	t.Run("home-relative path", func(t *testing.T) {
+		fakeHome := t.TempDir()
+		companyDir := filepath.Join(fakeHome, "marketplaces", "company")
+		os.MkdirAll(companyDir, 0755)
+		t.Setenv("HOME", fakeHome)
 
-		result, err := ParseMarketplaceSource(tmpDir)
+		result, err := ParseMarketplaceSource("~/marketplaces/company")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if result.SourceType() != "directory" {
 			t.Errorf("SourceType() = %v, want directory", result.SourceType())
+		}
+		s := result.(*DirectoryMarketSource)
+		if s.Path != companyDir {
+			t.Errorf("Path = %v, want %v", s.Path, companyDir)
 		}
 	})
 
@@ -413,7 +418,6 @@ func TestParseMarketplaceSource_InputParity(t *testing.T) {
 		input      string
 		wantType   string
 		setup      func()
-		cleanup    func()
 		assertFunc func(t *testing.T, src MarketSource)
 	}{
 		{
@@ -497,36 +501,12 @@ func TestParseMarketplaceSource_InputParity(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:     "home-relative path",
-			input:    "~/marketplaces/company",
-			wantType: "directory",
-			setup: func() {
-				home, _ := os.UserHomeDir()
-				os.MkdirAll(filepath.Join(home, "marketplaces", "company"), 0755)
-			},
-			cleanup: func() {
-				home, _ := os.UserHomeDir()
-				os.RemoveAll(filepath.Join(home, "marketplaces"))
-			},
-			assertFunc: func(t *testing.T, src MarketSource) {
-				s := src.(*DirectoryMarketSource)
-				home, _ := os.UserHomeDir()
-				expected := filepath.Join(home, "marketplaces", "company")
-				if s.Path != expected {
-					t.Errorf("Path = %v, want %v", s.Path, expected)
-				}
-			},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup()
-			}
-			if tt.cleanup != nil {
-				defer tt.cleanup()
 			}
 
 			result, err := ParseMarketplaceSource(tt.input)

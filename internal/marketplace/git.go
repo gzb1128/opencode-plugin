@@ -225,11 +225,18 @@ func (g *GitClient) fetchRef(repo *git.Repository, remoteURL, ref string) error 
 		config.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", ref, ref)),
 		config.RefSpec(fmt.Sprintf("+refs/tags/%s:refs/tags/%s", ref, ref)),
 	}
-	err = remote.Fetch(&git.FetchOptions{
-		RefSpecs: refSpecs,
-	})
-	if err != nil && err != git.NoErrAlreadyUpToDate {
-		return err
+
+	var fetched bool
+	for _, rs := range refSpecs {
+		err = remote.Fetch(&git.FetchOptions{
+			RefSpecs: []config.RefSpec{rs},
+		})
+		if err == nil || err == git.NoErrAlreadyUpToDate {
+			fetched = true
+		}
+	}
+	if !fetched {
+		return fmt.Errorf("ref %s not found as branch or tag: %w", ref, err)
 	}
 	return nil
 }
