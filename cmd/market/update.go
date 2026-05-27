@@ -102,14 +102,29 @@ func updateMarket(mgr *marketplace.Manager, configMgr *config.Manager, name stri
 }
 
 func getMarketURL(market map[string]interface{}) string {
-	if url, ok := market["url"].(string); ok && url != "" {
-		return url
-	}
-	if repo, ok := market["repo"].(string); ok && repo != "" {
-		return repo
-	}
-	if path, ok := market["path"].(string); ok && path != "" {
-		return path
+	source, _ := market["source"].(string)
+	switch source {
+	case "github":
+		if repo, ok := market["repo"].(string); ok && repo != "" {
+			return repo
+		}
+		if url, ok := market["url"].(string); ok && url != "" {
+			return url
+		}
+	case "file", "directory", "local":
+		if path, ok := market["path"].(string); ok && path != "" {
+			return path
+		}
+	default:
+		if url, ok := market["url"].(string); ok && url != "" {
+			return url
+		}
+		if repo, ok := market["repo"].(string); ok && repo != "" {
+			return repo
+		}
+		if path, ok := market["path"].(string); ok && path != "" {
+			return path
+		}
 	}
 	return ""
 }

@@ -10,9 +10,42 @@ import (
 
 var githubShorthandRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$`)
 
+func splitSourceRef(input string) (base string, ref string) {
+	input = strings.TrimSpace(input)
+	if idx := strings.LastIndex(input, "#"); idx >= 0 {
+		return input[:idx], input[idx+1:]
+	}
+	if idx := strings.LastIndex(input, "@"); idx >= 0 {
+		candidate := input[:idx]
+		if githubShorthandRegex.MatchString(candidate) {
+			return candidate, input[idx+1:]
+		}
+	}
+	return input, ""
+}
+
 func ParseMarketplaceSource(url string) (MarketSource, error) {
+	url = strings.TrimSpace(url)
+
 	if url == "" {
 		return nil, fmt.Errorf("url cannot be empty")
+	}
+
+	if strings.HasPrefix(url, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to expand home directory: %w", err)
+		}
+		expanded := filepath.Join(home, url[2:])
+		if _, err := os.Stat(expanded); err == nil {
+			absPath := expanded
+			info, err := os.Stat(absPath)
+			if err == nil && !info.IsDir() {
+				return &FileMarketSource{Path: absPath}, nil
+			}
+			return &DirectoryMarketSource{Path: absPath}, nil
+		}
+		return nil, fmt.Errorf("unsupported marketplace source format: %s", url)
 	}
 
 	if _, err := os.Stat(url); err == nil {
@@ -30,58 +63,61 @@ func ParseMarketplaceSource(url string) (MarketSource, error) {
 		}, nil
 	}
 
-	if matched := githubShorthandRegex.MatchString(url); matched {
+	base, ref := splitSourceRef(url)
+
+	if matched := githubShorthandRegex.MatchString(base); matched {
 		return &GitHubMarketSource{
-			Repo: url,
+			Repo: base,
+			Ref:  ref,
 		}, nil
 	}
 
-	if strings.HasPrefix(url, "https://github.com/") || strings.HasPrefix(url, "http://github.com/") {
-		repo := extractRepoFromGitHubURL(url)
-		if repo != "" {
-			return &GitHubMarketSource{
-				Repo: repo,
-				URL:  url,
-			}, nil
+	if strings.HasPrefix(base, "https://github.com/") || strings.HasPrefix(base, "http://github.com/") {
+		var gitURL string
+		if strings.HasSuffix(base, ".git") {
+			gitURL = base
+		} else {
+			gitURL = base + ".git"
 		}
-	}
-
-	if strings.HasPrefix(url, "git@github.com:") {
-		repo := strings.TrimPrefix(url, "git@github.com:")
-		repo = strings.TrimSuffix(repo, ".git")
-		return &GitHubMarketSource{
-			Repo: repo,
-			URL:  url,
-		}, nil
-	}
-
-	if strings.HasSuffix(url, "marketplace.json") {
-		return &URLMarketSource{
-			URL: url,
-		}, nil
-	}
-
-	if strings.HasPrefix(url, "git@") || strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://") {
 		return &GitMarketSource{
-			URL: url,
+			URL: gitURL,
+			Ref: ref,
+		}, nil
+	}
+
+	if strings.HasPrefix(base, "git@github.com:") {
+		return &GitMarketSource{
+			URL: base,
+			Ref: ref,
+		}, nil
+	}
+
+	if strings.HasSuffix(base, "marketplace.json") {
+		return &URLMarketSource{
+			URL: base,
+		}, nil
+	}
+
+	if strings.HasPrefix(base, "git@") || strings.HasPrefix(base, "https://") || strings.HasPrefix(base, "http://") || isSSHURL(base) {
+		return &GitMarketSource{
+			URL: base,
+			Ref: ref,
 		}, nil
 	}
 
 	return nil, fmt.Errorf("unsupported marketplace source format: %s", url)
 }
 
-func extractRepoFromGitHubURL(url string) string {
-	var path string
-	if strings.HasPrefix(url, "https://github.com/") {
-		path = strings.TrimPrefix(url, "https://github.com/")
-	} else if strings.HasPrefix(url, "http://github.com/") {
-		path = strings.TrimPrefix(url, "http://github.com/")
+func isSSHURL(s string) bool {
+	at := strings.Index(s, "@")
+	if at < 0 {
+		return false
 	}
-	path = strings.TrimSuffix(path, ".git")
-	path = strings.TrimSuffix(path, "/")
-	parts := strings.SplitN(path, "/", 3)
-	if len(parts) >= 2 {
-		return parts[0] + "/" + parts[1]
+	rest := s[at+1:]
+	colon := strings.Index(rest, ":")
+	if colon < 0 {
+		return false
 	}
-	return ""
+	host := rest[:colon]
+	return !strings.Contains(host, "/")
 }
