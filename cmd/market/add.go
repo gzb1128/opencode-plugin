@@ -86,6 +86,8 @@ Examples:
 			os.Exit(1)
 		}
 
+		name = resolveAddedMarketplaceName(name, mp.Name, cmd.Flag("name").Value.String() != "")
+
 		installLocation := resultSource.InstallLocation()
 
 		marketSrc := marketplace.MarketSourceToConfig(resultSource)
@@ -96,7 +98,7 @@ Examples:
 			os.Exit(1)
 		}
 
-		fmt.Printf("\n✓ Successfully added marketplace: %s\n", mp.Name)
+		fmt.Printf("\n✓ Successfully added marketplace: %s\n", name)
 		fmt.Printf("  %d plugins available\n", len(mp.Plugins))
 		fmt.Printf("  Location: %s\n", installLocation)
 	},
@@ -128,6 +130,13 @@ func extractNameFromURL(url string) string {
 	}
 
 	return name
+}
+
+func resolveAddedMarketplaceName(derivedName, manifestName string, userSpecifiedName bool) string {
+	if userSpecifiedName || manifestName == "" {
+		return derivedName
+	}
+	return manifestName
 }
 
 func init() {
