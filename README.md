@@ -43,64 +43,18 @@ browser. When you first run `opencode-plugin`, you may see:
 > malicious software.**
 
 This happens because release binaries are built on CI and are not signed with an
-Apple Developer ID. You have a few options to resolve this.
-
-**Option 1: Remove the quarantine attribute (recommended)**
-
-Run this in Terminal after downloading and extracting the binary:
+Apple Developer ID. Run the following command in Terminal to remove the
+quarantine attribute and re-sign the binary locally:
 
 ```bash
-xattr -cr /path/to/opencode-plugin
+xattr -cr /usr/local/bin/opencode-plugin && codesign --force --sign - /usr/local/bin/opencode-plugin
 ```
 
-If you already moved the binary to `PATH` (for example `/usr/local/bin`):
+If the binary is in a different location, replace `/usr/local/bin/opencode-plugin`
+with the actual path.
 
-```bash
-xattr -cr /usr/local/bin/opencode-plugin
-```
-
-Then verify:
-
-```bash
-opencode-plugin --version
-```
-
-**Option 2: Re-sign the binary locally**
-
-If Option 1 alone does not work, force a local ad-hoc signature after removing
-the quarantine attribute:
-
-```bash
-xattr -cr /usr/local/bin/opencode-plugin
-codesign --force --sign - /usr/local/bin/opencode-plugin
-```
-
-**Option 3: Use the GUI**
-
-Right-click the binary in Finder and choose **Open**. In the security dialog,
-click **Open** to allow it to run. You only need to do this once.
-
-**Option 4: Allow apps from anywhere (not recommended)**
-
-If you frequently run unsigned binaries, you can disable Gatekeeper globally:
-
-```bash
-sudo spctl --master-disable
-```
-
-To re-enable later:
-
-```bash
-sudo spctl --master-enable
-```
-
-**Why this happens**
-
-Release binaries are built with GoReleaser on GitHub Actions. They carry a
-valid ad-hoc signature (`codesign -s -`) but do not have an Apple Developer ID
-code signature or notarization, which is a paid Apple Developer program feature.
-Removing the quarantine attribute or re-signing locally tells macOS you trust
-the binary.
+Alternatively, right-click the binary in Finder and choose **Open**, then click
+**Open** in the security dialog. You only need to do this once.
 
 ### Build from Source
 
