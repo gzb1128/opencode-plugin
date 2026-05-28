@@ -1,6 +1,7 @@
 # Binaries
 /bin/
 /opencode-plugin
+/dist/
 
 # Hidden directories at root (e.g., .claude, .cursor, etc.)
 /.*/

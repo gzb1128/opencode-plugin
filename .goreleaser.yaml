@@ -1,0 +1,47 @@
+version: 2
+
+project_name: opencode-plugin
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: opencode-plugin
+    main: .
+    binary: opencode-plugin
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/opencode/plugin-cli/cmd.version={{ .Version }}
+    targets:
+      - linux_amd64_v1
+      - linux_arm64
+      - darwin_amd64_v1
+      - darwin_arm64
+      - windows_amd64_v1
+
+archives:
+  - id: opencode-plugin
+    ids:
+      - opencode-plugin
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Amd64 }}{{ if ne . "v1" }}_{{ . }}{{ end }}{{ end }}
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
