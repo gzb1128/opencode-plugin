@@ -19,6 +19,23 @@ It keeps plugin files in a local cache, links plugin skills into
 
 ## Install
 
+### Download a Release Binary
+
+Download the archive for your OS and CPU architecture from:
+
+```text
+https://github.com/gzb1128/opencode-plugin/releases
+```
+
+Extract the archive, move `opencode-plugin` into a directory on your `PATH`, and
+verify the install:
+
+```bash
+opencode-plugin --version
+```
+
+### Build from Source
+
 Build and install with `make`:
 
 ```bash
