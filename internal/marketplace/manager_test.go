@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"time"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 func TestManagerAddFileMarketSource(t *testing.T) {
@@ -412,7 +415,13 @@ func initTestGitRepo(t *testing.T, dir string, branchName, marketplaceName strin
 	if err != nil {
 		t.Fatalf("failed to add files: %v", err)
 	}
-	_, err = wt.Commit("initial commit", &git.CommitOptions{})
+	_, err = wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "test",
+			Email: "test@test.com",
+			When:  time.Now(),
+		},
+	})
 	if err != nil {
 		t.Fatalf("failed to commit: %v", err)
 	}
@@ -475,7 +484,9 @@ func TestManagerAddSource_GitWithRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to add: %v", err)
 	}
-	_, err = wt.Commit("feature commit", &git.CommitOptions{})
+	_, err = wt.Commit("feature commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	})
 	if err != nil {
 		t.Fatalf("failed to commit: %v", err)
 	}
@@ -523,7 +534,9 @@ func TestManagerAddSource_GitWithCustomPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to add: %v", err)
 	}
-	_, err = wt.Commit("add custom path", &git.CommitOptions{})
+	_, err = wt.Commit("add custom path", &git.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	})
 	if err != nil {
 		t.Fatalf("failed to commit: %v", err)
 	}

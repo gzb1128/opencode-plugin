@@ -1,0 +1,75 @@
+{
+  "name": "test-marketplace",
+  "description": "Test marketplace for unit tests",
+  "owner": {
+    "name": "Test Org",
+    "email": "test@example.com"
+  },
+  "plugins": [
+    {
+      "name": "test-plugin",
+      "description": "A test plugin",
+      "version": "1.0.0",
+      "category": "development",
+      "author": {
+        "name": "Test Author",
+        "email": "author@example.com"
+      },
+      "source": "./plugins/test-plugin",
+      "homepage": "https://github.com/test/test-plugin",
+      "keywords": ["test", "development"]
+    },
+    {
+      "name": "external-plugin",
+      "description": "An external plugin",
+      "source": {
+        "source": "github",
+        "repo": "test/external-plugin"
+      }
+    },
+    {
+      "name": "npm-plugin",
+      "description": "An npm-based plugin",
+      "source": {
+        "source": "npm",
+        "package": "@org/test-plugin",
+        "version": "^1.0.0"
+      }
+    },
+    {
+      "name": "git-plugin",
+      "description": "A git-based plugin",
+      "source": {
+        "source": "git",
+        "url": "https://gitlab.com/org/plugin.git",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "subdir-plugin",
+      "description": "A plugin from subdirectory",
+      "source": {
+        "source": "git-subdir",
+        "url": "org/monorepo",
+        "path": "plugins/subdir-plugin",
+        "ref": "v2.0.0"
+      }
+    },
+    {
+      "name": "url-plugin",
+      "description": "A URL-based plugin",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/org/plugin.git",
+        "ref": "v1.0.0",
+        "sha": "abc123def456789012345678901234567890abcd"
+      }
+    }
+  ],
+  "metadata": {
+    "version": "1.0.0",
+    "description": "Test marketplace metadata"
+  },
+  "forceRemoveDeletedPlugins": true,
+  "allowCrossMarketplaceDependenciesOn": ["other-market"]
+}
