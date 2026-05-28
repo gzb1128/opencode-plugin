@@ -11,6 +11,9 @@ import (
 )
 
 func TestCloneOrPullWithOptions_ExistingRepoWithBranchRef(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: go-git file transport depends on system git version compatibility")
+	}
 	srcDir := t.TempDir()
 	srcRepo, err := git.PlainInit(srcDir, false)
 	if err != nil {
@@ -50,6 +53,9 @@ func TestCloneOrPullWithOptions_ExistingRepoWithBranchRef(t *testing.T) {
 }
 
 func TestCloneOrPullWithOptions_ExistingRepoWithTagRef(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: go-git file transport depends on system git version compatibility")
+	}
 	srcDir := t.TempDir()
 	srcRepo, err := git.PlainInit(srcDir, false)
 	if err != nil {
@@ -86,6 +92,9 @@ func TestCloneOrPullWithOptions_ExistingRepoWithTagRef(t *testing.T) {
 }
 
 func TestFetchRef_TagOnlyRef(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: go-git file transport depends on system git version compatibility")
+	}
 	srcDir := t.TempDir()
 	srcRepo, _ := git.PlainInit(srcDir, false)
 	srcWt, _ := srcRepo.Worktree()
@@ -113,6 +122,9 @@ func TestFetchRef_TagOnlyRef(t *testing.T) {
 }
 
 func TestFetchRef_NonexistentRef(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: go-git file transport depends on system git version compatibility")
+	}
 	srcDir := t.TempDir()
 	srcRepo, _ := git.PlainInit(srcDir, false)
 	srcWt, _ := srcRepo.Worktree()
