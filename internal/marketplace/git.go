@@ -68,7 +68,8 @@ func (g *GitClient) Checkout(repoPath, ref string) error {
 	}
 
 	err = worktree.Checkout(&git.CheckoutOptions{
-		Hash: *hash,
+		Hash:  *hash,
+		Force: true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to checkout %s: %w", ref, err)
@@ -101,7 +102,7 @@ func (g *GitClient) checkoutRemoteRef(repoPath, ref string) error {
 			lastErr = err
 			continue
 		}
-		if err := worktree.Checkout(&git.CheckoutOptions{Hash: *hash}); err != nil {
+		if err := worktree.Checkout(&git.CheckoutOptions{Hash: *hash, Force: true}); err != nil {
 			return fmt.Errorf("failed to checkout %s: %w", ref, err)
 		}
 		return nil
@@ -119,6 +120,10 @@ func (g *GitClient) Pull(repoPath string) error {
 	worktree, err := repo.Worktree()
 	if err != nil {
 		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	if err := worktree.Reset(&git.ResetOptions{Mode: git.HardReset}); err != nil {
+		return fmt.Errorf("failed to reset worktree before pull: %w", err)
 	}
 
 	err = worktree.Pull(&git.PullOptions{
@@ -180,6 +185,13 @@ func (g *GitClient) CloneOrPullWithOptions(url, path string, opts CloneOptions) 
 	}
 
 	if opts.Ref != "" {
+		wt, err := repo.Worktree()
+		if err != nil {
+			return fmt.Errorf("failed to get worktree: %w", err)
+		}
+		if err := wt.Reset(&git.ResetOptions{Mode: git.HardReset}); err != nil {
+			return fmt.Errorf("failed to reset worktree before fetch: %w", err)
+		}
 		if err := g.fetchRef(repo, url, opts.Ref); err != nil {
 			return fmt.Errorf("failed to fetch ref %s: %w", opts.Ref, err)
 		}
@@ -189,6 +201,10 @@ func (g *GitClient) CloneOrPullWithOptions(url, path string, opts CloneOptions) 
 	worktree, err := repo.Worktree()
 	if err != nil {
 		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	if err := worktree.Reset(&git.ResetOptions{Mode: git.HardReset}); err != nil {
+		return fmt.Errorf("failed to reset worktree before pull: %w", err)
 	}
 
 	err = worktree.Pull(&git.PullOptions{
