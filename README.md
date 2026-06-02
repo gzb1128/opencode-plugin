@@ -7,6 +7,10 @@ It keeps plugin files in a local cache, links plugin skills into
 `~/.agents/skills`, and registers plugin MCP servers in
 `~/.config/opencode/opencode.json`.
 
+> **Note:** This project is not built by, endorsed by, or affiliated with the
+> OpenCode team. It is an independent, community-built tool that works with the
+> OpenCode ecosystem.
+
 ## What It Does
 
 - Adds plugin marketplaces from GitHub shorthand, Git URLs, local marketplace
