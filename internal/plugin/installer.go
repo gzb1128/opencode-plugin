@@ -37,7 +37,7 @@ func NewInstaller(configMgr *config.Manager) *Installer {
 		resolver:   NewVersionResolver(),
 		linker:     opencode.NewLinker(paths.AgentsDir),
 		marketMgr:  marketplace.NewManager(paths.MarketsDir),
-		mcpManager: mcp.NewManager(paths.OpenCodeConfig),
+		mcpManager: mcp.NewManager(paths.OpenCodeConfig, paths.PluginDataDir),
 	}
 }
 
@@ -138,7 +138,7 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 		fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", err)
 	}
 
-	mcpCount, err := i.installMCP(mat.Path, resolved.Plugin.Name)
+	mcpCount, err := i.installMCP(mat.Path, resolved.Plugin.Name, opts.MarketName)
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
 	}
@@ -242,7 +242,7 @@ func readPackageVersionFromJSON(dir string) (string, error) {
 	return pkg.Version, nil
 }
 
-func (i *Installer) installMCP(pluginPath, pluginName string) (int, error) {
+func (i *Installer) installMCP(pluginPath, pluginName, marketName string) (int, error) {
 	servers, err := i.mcpManager.GetMCPServers(pluginPath)
 	if err != nil {
 		return 0, err
@@ -252,7 +252,7 @@ func (i *Installer) installMCP(pluginPath, pluginName string) (int, error) {
 		return 0, nil
 	}
 
-	if err := i.mcpManager.InstallMCPConfig(pluginPath, pluginName); err != nil {
+	if err := i.mcpManager.InstallMCPConfig(pluginPath, pluginName, marketName); err != nil {
 		return 0, err
 	}
 
@@ -430,6 +430,9 @@ func (i *Installer) generateFallbackManifest(plugin *marketplace.Plugin, cachePa
 		"name":        plugin.Name,
 		"description": plugin.Description,
 	}
+	if plugin.DisplayName != "" {
+		manifest["displayName"] = plugin.DisplayName
+	}
 	if plugin.Version != "" {
 		manifest["version"] = plugin.Version
 	}
@@ -522,6 +525,105 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 	}
 
 	fmt.Printf("✓ Successfully removed plugin: %s (%d symlinks removed)\n", pluginName, count)
+
+	return nil
+}
+
+func (i *Installer) CleanupOldVersions(currentInstallPath string) error {
+	cacheDir := i.configMgr.GetPaths().CacheDir
+	if !isWithinDir(currentInstallPath, cacheDir) {
+		return fmt.Errorf("path %q is not inside cache directory %q", currentInstallPath, cacheDir)
+	}
+
+	absCurrent, err := filepath.Abs(filepath.Clean(currentInstallPath))
+	if err != nil {
+		return fmt.Errorf("failed to resolve current install path: %w", err)
+	}
+
+	evalCurrent, err := filepath.EvalSymlinks(absCurrent)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate symlinks for current install path: %w", err)
+	}
+
+	parent := filepath.Dir(evalCurrent)
+
+	absCacheDir, _ := filepath.Abs(filepath.Clean(cacheDir))
+	evalCacheDir, err := filepath.EvalSymlinks(absCacheDir)
+	if err != nil {
+		evalCacheDir = absCacheDir
+	}
+
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(parent, evalCacheDir+sep) {
+		return fmt.Errorf("parent directory %q is not inside cache directory %q", parent, cacheDir)
+	}
+
+	parentRel := parent[len(evalCacheDir)+1:]
+	parts := strings.Split(parentRel, sep)
+	if len(parts) != 2 {
+		return fmt.Errorf("parent directory %q does not match expected cache/<market>/<plugin> shape", parent)
+	}
+
+	referenced, err := i.configMgr.GetAllInstallPaths()
+	if err != nil {
+		return fmt.Errorf("failed to load install paths: %w", err)
+	}
+
+	evalReferenced := make(map[string]bool)
+	for p := range referenced {
+		ep, err := filepath.Abs(filepath.Clean(p))
+		if err != nil {
+			continue
+		}
+		if ev, err := filepath.EvalSymlinks(ep); err == nil {
+			ep = ev
+		}
+		evalReferenced[ep] = true
+	}
+
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read parent directory: %w", err)
+	}
+
+	var removed int
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+
+		if !info.IsDir() {
+			continue
+		}
+
+		entryPath := filepath.Join(parent, entry.Name())
+
+		if entryPath == evalCurrent {
+			continue
+		}
+
+		if evalReferenced[entryPath] {
+			continue
+		}
+
+		if err := os.RemoveAll(entryPath); err != nil {
+			fmt.Printf("⚠️  Failed to remove old cache %s: %v\n", entryPath, err)
+			continue
+		}
+		removed++
+	}
+
+	if removed > 0 {
+		fmt.Printf("✓ Cleaned up %d old cache version(s)\n", removed)
+	}
 
 	return nil
 }

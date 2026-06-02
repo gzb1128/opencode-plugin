@@ -1,8 +1,10 @@
 package market
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/opencode/plugin-cli/internal/config"
 	"github.com/opencode/plugin-cli/internal/marketplace"
@@ -10,10 +12,24 @@ import (
 )
 
 var Cmd = &cobra.Command{
-	Use:   "market",
-	Short: "Manage plugin marketplaces",
-	Long:  "Add, list, update, and remove plugin marketplaces",
+	Use:     "market",
+	Aliases: []string{"marketplace"},
+	Short:   "Manage plugin marketplaces",
+	Long:    "Add, list, update, and remove plugin marketplaces",
 }
+
+type marketJSONEntry struct {
+	Name            string `json:"name"`
+	SourceType      string `json:"sourceType"`
+	Repo            string `json:"repo,omitempty"`
+	URL             string `json:"url,omitempty"`
+	Path            string `json:"path,omitempty"`
+	InstallLocation string `json:"installLocation"`
+	Cloned          bool   `json:"cloned"`
+	LastUpdated     string `json:"lastUpdated,omitempty"`
+}
+
+var listJSON bool
 
 var listCmd = &cobra.Command{
 	Use:   "list",
@@ -29,6 +45,11 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading markets: %v\n", err)
 			os.Exit(1)
+		}
+
+		if listJSON {
+			printMarketsJSON(markets)
+			return
 		}
 
 		if len(markets) == 0 {
@@ -86,6 +107,58 @@ var listCmd = &cobra.Command{
 	},
 }
 
+func printMarketsJSON(markets config.KnownMarkets) {
+	entries := make([]marketJSONEntry, 0, len(markets))
+	for name, market := range markets {
+		entry := marketJSONEntry{
+			Name: name,
+		}
+		if sourceType, ok := market["source"].(string); ok {
+			entry.SourceType = sourceType
+		}
+		if repo, ok := market["repo"].(string); ok {
+			entry.Repo = repo
+		}
+		if url, ok := market["url"].(string); ok {
+			entry.URL = url
+		}
+		if path, ok := market["path"].(string); ok {
+			entry.Path = path
+		}
+		if installLoc, ok := market["installLocation"].(string); ok {
+			entry.InstallLocation = installLoc
+		}
+		entry.Cloned = isMarketCloned(market)
+		if lastUpdated, ok := market["lastUpdated"].(string); ok {
+			entry.LastUpdated = lastUpdated
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(entries)
+}
+
+func isMarketCloned(market map[string]interface{}) bool {
+	installLoc, ok := market["installLocation"].(string)
+	if !ok || installLoc == "" {
+		return false
+	}
+	source := marketplace.NewMarketSourceFromConfig(market)
+	indexPath, err := marketplace.MarketSourceIndexPath(source)
+	if err != nil {
+		return false
+	}
+	if _, err := os.Stat(indexPath); err != nil {
+		return false
+	}
+	return true
+}
+
 func init() {
+	listCmd.Flags().BoolVar(&listJSON, "json", false, "Output as JSON")
 	Cmd.AddCommand(listCmd)
 }

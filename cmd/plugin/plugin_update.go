@@ -106,20 +106,29 @@ Examples:
 }
 
 func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, pluginName, marketName string) error {
-	// Remove old version
+	key := fmt.Sprintf("%s@%s", pluginName, marketName)
+
 	if err := installer.Remove(pluginName, marketName); err != nil {
 		return fmt.Errorf("failed to remove old version: %w", err)
 	}
 
-	// Install latest version
 	opts := plugin.InstallOptions{
 		MarketName: marketName,
-		Version:    "", // Empty means latest
+		Version:    "",
 		Scope:      "user",
 	}
 
 	if err := installer.Install(pluginName, opts); err != nil {
 		return fmt.Errorf("failed to install new version: %w", err)
+	}
+
+	record, err := configMgr.GetInstallRecord(key)
+	if err != nil {
+		return nil
+	}
+
+	if err := installer.CleanupOldVersions(record.InstallPath); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️  Warning: cache cleanup failed: %v\n", err)
 	}
 
 	return nil

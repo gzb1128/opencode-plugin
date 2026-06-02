@@ -43,5 +43,6 @@ func (e *Environment) Paths() *Paths {
 		InstalledFile:  filepath.Join(e.BaseDir, "installed_plugins.json"),
 		OpenCodeConfig: e.OpenCodeConfig,
 		AgentsDir:      e.AgentsDir,
+		PluginDataDir:  filepath.Join(e.BaseDir, "data"),
 	}
 }

@@ -166,6 +166,7 @@ type Owner struct {
 
 type Plugin struct {
 	Name            string          `json:"name"`
+	DisplayName     string          `json:"displayName,omitempty"`
 	Description     string          `json:"description"`
 	Version         string          `json:"version,omitempty"`
 	Category        string          `json:"category,omitempty"`

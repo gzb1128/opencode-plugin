@@ -564,6 +564,53 @@ func TestValidateMarketplaceName(t *testing.T) {
 	}
 }
 
+func TestParseMarketplaceIndex_PreservesDisplayName(t *testing.T) {
+	content := `{
+  "name": "display-market",
+  "plugins": [
+    {
+      "name": "tool",
+      "displayName": "Tool Pro",
+      "description": "A tool plugin",
+      "source": "./plugins/tool"
+    },
+    {
+      "name": "plain",
+      "description": "No display name",
+      "source": "./plugins/plain"
+    }
+  ]
+}`
+
+	tmpFile := filepath.Join(t.TempDir(), "display-name-market.json")
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mp, err := ParseMarketplaceIndex(tmpFile)
+	if err != nil {
+		t.Fatalf("ParseMarketplaceIndex() error = %v", err)
+	}
+
+	if len(mp.Plugins) != 2 {
+		t.Fatalf("Plugins count = %v, want 2", len(mp.Plugins))
+	}
+
+	if mp.Plugins[0].Name != "tool" {
+		t.Errorf("Name = %v, want tool", mp.Plugins[0].Name)
+	}
+	if mp.Plugins[0].DisplayName != "Tool Pro" {
+		t.Errorf("DisplayName = %v, want 'Tool Pro'", mp.Plugins[0].DisplayName)
+	}
+
+	if mp.Plugins[1].Name != "plain" {
+		t.Errorf("Name = %v, want plain", mp.Plugins[1].Name)
+	}
+	if mp.Plugins[1].DisplayName != "" {
+		t.Errorf("DisplayName = %v, want empty", mp.Plugins[1].DisplayName)
+	}
+}
+
 func TestResolveGitSubdirURL(t *testing.T) {
 	tests := []struct {
 		name string

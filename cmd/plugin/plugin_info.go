@@ -83,6 +83,9 @@ Examples:
 
 		// Print plugin info
 		fmt.Printf("Plugin: %s\n", p.Name)
+		if p.DisplayName != "" {
+			fmt.Printf("Display Name: %s\n", p.DisplayName)
+		}
 		fmt.Printf("Description: %s\n", p.Description)
 		if p.Version != "" {
 			fmt.Printf("Version: %s\n", p.Version)
