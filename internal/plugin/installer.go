@@ -45,6 +45,7 @@ type InstallOptions struct {
 	MarketName string
 	Version    string
 	Scope      string
+	Force      bool
 }
 
 func (i *Installer) Install(pluginName string, opts InstallOptions) error {
@@ -113,6 +114,7 @@ func (i *Installer) Install(pluginName string, opts InstallOptions) error {
 		depOpts := InstallOptions{
 			MarketName: parts[1],
 			Scope:      opts.Scope,
+			Force:      opts.Force,
 		}
 		if err := i.installOneResolvedPlugin(rp, depOpts); err != nil {
 			return fmt.Errorf("failed to install dependency %s: %w", id, err)
@@ -133,7 +135,7 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 		manifest, _ = opencode.ReadManifest(mat.ManifestPath)
 	}
 
-	counts, err := i.linker.CreateSymlinksFromManifest(mat.Path, manifest)
+	counts, err := i.linker.CreateSymlinksFromManifest(mat.Path, manifest, opts.Force)
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", err)
 	}

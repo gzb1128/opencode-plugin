@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var forceUpdate bool
+
 var updateCmd = &cobra.Command{
 	Use:   "update [<plugin-name>[@<marketplace>]]",
 	Short: "Update installed plugins",
@@ -20,9 +22,11 @@ If no plugin is specified, updates all installed plugins.
 Examples:
   opencode-plugin plugin update
   opencode-plugin plugin update my-plugin
-  opencode-plugin plugin update my-plugin@my-market`,
+  opencode-plugin plugin update my-plugin@my-market
+  opencode-plugin plugin update --force my-plugin`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		forceUpdate, _ = cmd.Flags().GetBool("force")
 		configMgr, err := config.NewManager()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to initialize config: %v\n", err)
@@ -116,6 +120,7 @@ func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, plugin
 		MarketName: marketName,
 		Version:    "",
 		Scope:      "user",
+		Force:      forceUpdate,
 	}
 
 	if err := installer.Install(pluginName, opts); err != nil {
@@ -135,5 +140,6 @@ func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, plugin
 }
 
 func init() {
+	updateCmd.Flags().BoolP("force", "f", false, "Force overwrite existing skills, commands, and agents")
 	Cmd.AddCommand(updateCmd)
 }
