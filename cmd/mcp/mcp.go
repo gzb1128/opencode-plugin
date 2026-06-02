@@ -31,7 +31,7 @@ var listCmd = &cobra.Command{
 		}
 
 		paths := configMgr.GetPaths()
-		mgr := mcp.NewManager(paths.OpenCodeConfig)
+		mgr := mcp.NewManager(paths.OpenCodeConfig, paths.PluginDataDir)
 
 		servers, err := mgr.ListMCPServers()
 		if err != nil {
@@ -91,7 +91,7 @@ var showCmd = &cobra.Command{
 		}
 
 		paths := configMgr.GetPaths()
-		mgr := mcp.NewManager(paths.OpenCodeConfig)
+		mgr := mcp.NewManager(paths.OpenCodeConfig, paths.PluginDataDir)
 
 		servers, err := mgr.ListMCPServers()
 		if err != nil {

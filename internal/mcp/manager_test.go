@@ -10,7 +10,7 @@ import (
 func TestReadMCPConfig(t *testing.T) {
 	t.Run("reads valid .mcp.json file with wrapped format", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		mcpContent := `{
 			"mcpServers": {
@@ -62,7 +62,7 @@ func TestReadMCPConfig(t *testing.T) {
 
 	t.Run("reads valid .mcp.json file with direct format (Claude Code standard)", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		mcpContent := `{
 			"github": {
@@ -129,7 +129,7 @@ func TestReadMCPConfig(t *testing.T) {
 
 	t.Run("returns nil when .mcp.json does not exist", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		config, err := mgr.ReadMCPConfig(tmpDir)
 		if err != nil {
@@ -143,7 +143,7 @@ func TestReadMCPConfig(t *testing.T) {
 
 	t.Run("returns error for invalid JSON", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		mcpPath := filepath.Join(tmpDir, ".mcp.json")
 		if err := os.WriteFile(mcpPath, []byte("invalid json"), 0644); err != nil {
@@ -160,7 +160,7 @@ func TestReadMCPConfig(t *testing.T) {
 func TestReadPluginJSON(t *testing.T) {
 	t.Run("reads valid plugin.json with mcpServers", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		pluginDir := filepath.Join(tmpDir, ".claude-plugin")
 		if err := os.MkdirAll(pluginDir, 0755); err != nil {
@@ -210,7 +210,7 @@ func TestReadPluginJSON(t *testing.T) {
 func TestGetMCPServers(t *testing.T) {
 	t.Run("merges servers from .mcp.json and plugin.json", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		mcpContent := `{
 			"mcpServers": {
@@ -262,7 +262,7 @@ func TestGetMCPServers(t *testing.T) {
 
 	t.Run("returns empty map when no MCP servers", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		pluginDir := filepath.Join(tmpDir, ".claude-plugin")
 		if err := os.MkdirAll(pluginDir, 0755); err != nil {
@@ -286,7 +286,7 @@ func TestGetMCPServers(t *testing.T) {
 
 	t.Run("reads MCP servers from .mcp.json without plugin.json", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		mcpContent := `{
 			"github": {
@@ -316,7 +316,7 @@ func TestGetMCPServers(t *testing.T) {
 func TestInstallMCPConfig(t *testing.T) {
 	t.Run("installs stdio server to opencode.json with correct format", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		pluginDir := filepath.Join(tmpDir, "my-plugin")
 		pluginJSONDir := filepath.Join(pluginDir, ".claude-plugin")
@@ -339,7 +339,7 @@ func TestInstallMCPConfig(t *testing.T) {
 			t.Fatalf("Failed to write .mcp.json: %v", err)
 		}
 
-		if err := mgr.InstallMCPConfig(pluginDir, "my-plugin"); err != nil {
+		if err := mgr.InstallMCPConfig(pluginDir, "my-plugin", "test-market"); err != nil {
 			t.Fatalf("InstallMCPConfig failed: %v", err)
 		}
 
@@ -383,7 +383,7 @@ func TestInstallMCPConfig(t *testing.T) {
 
 	t.Run("installs http server as remote type", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		pluginDir := filepath.Join(tmpDir, "gh-plugin")
 		os.MkdirAll(pluginDir, 0755)
@@ -399,7 +399,7 @@ func TestInstallMCPConfig(t *testing.T) {
 			t.Fatalf("Failed to write .mcp.json: %v", err)
 		}
 
-		if err := mgr.InstallMCPConfig(pluginDir, "gh-plugin"); err != nil {
+		if err := mgr.InstallMCPConfig(pluginDir, "gh-plugin", "test-market"); err != nil {
 			t.Fatalf("InstallMCPConfig failed: %v", err)
 		}
 
@@ -432,7 +432,7 @@ func TestInstallMCPConfig(t *testing.T) {
 
 	t.Run("substitutes variables in command and args", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		pluginDir := filepath.Join(tmpDir, "my-plugin")
 		pluginJSONDir := filepath.Join(pluginDir, ".claude-plugin")
@@ -450,7 +450,7 @@ func TestInstallMCPConfig(t *testing.T) {
 			}
 		}`), 0644)
 
-		if err := mgr.InstallMCPConfig(pluginDir, "my-plugin"); err != nil {
+		if err := mgr.InstallMCPConfig(pluginDir, "my-plugin", "test-market"); err != nil {
 			t.Fatalf("InstallMCPConfig failed: %v", err)
 		}
 
@@ -484,7 +484,7 @@ func TestInstallMCPConfig(t *testing.T) {
 
 	t.Run("merges with existing opencode.json preserving other keys", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		existingContent := `{
 			"$schema": "https://opencode.ai/config.json",
@@ -512,7 +512,7 @@ func TestInstallMCPConfig(t *testing.T) {
 			t.Fatalf("Failed to write .mcp.json: %v", err)
 		}
 
-		if err := mgr.InstallMCPConfig(pluginDir, "new-plugin"); err != nil {
+		if err := mgr.InstallMCPConfig(pluginDir, "new-plugin", "test-market"); err != nil {
 			t.Fatalf("InstallMCPConfig failed: %v", err)
 		}
 
@@ -546,7 +546,7 @@ func TestInstallMCPConfig(t *testing.T) {
 func TestUninstallMCPConfig(t *testing.T) {
 	t.Run("removes servers with plugin prefix from opencode.json", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		existingContent := `{
 			"mcp": {
@@ -608,7 +608,7 @@ func TestUninstallMCPConfig(t *testing.T) {
 
 	t.Run("handles missing config file", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		err := mgr.UninstallMCPConfig("my-plugin")
 		if err != nil {
@@ -619,7 +619,7 @@ func TestUninstallMCPConfig(t *testing.T) {
 
 func TestSubstituteVariables(t *testing.T) {
 	tmpDir := t.TempDir()
-	mgr := NewManager(tmpDir)
+	mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 	pluginPath := "/path/to/plugin"
 	pluginName := "my-plugin"
@@ -630,7 +630,7 @@ func TestSubstituteVariables(t *testing.T) {
 			Command: "${CLAUDE_PLUGIN_ROOT}/bin/server",
 		}
 
-		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion)
+		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion, "")
 
 		expected := filepath.Join(pluginPath, "bin/server")
 		if result.Command != expected {
@@ -647,7 +647,7 @@ func TestSubstituteVariables(t *testing.T) {
 			},
 		}
 
-		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion)
+		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion, "")
 
 		if result.Args[0] != "my-plugin.js" {
 			t.Errorf("Expected arg 'my-plugin.js', got '%s'", result.Args[0])
@@ -665,7 +665,7 @@ func TestSubstituteVariables(t *testing.T) {
 			},
 		}
 
-		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion)
+		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion, "")
 
 		if result.Env["VERSION"] != "1.0.0" {
 			t.Errorf("Expected env '1.0.0', got '%s'", result.Env["VERSION"])
@@ -677,7 +677,7 @@ func TestSubstituteVariables(t *testing.T) {
 			Command: "${CLAUDE_PLUGIN_ROOT}/bin/${PLUGIN_NAME}-v${PLUGIN_VERSION}",
 		}
 
-		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion)
+		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion, "")
 
 		expected := filepath.Join(pluginPath, "bin/my-plugin-v1.0.0")
 		if result.Command != expected {
@@ -691,7 +691,7 @@ func TestSubstituteVariables(t *testing.T) {
 			URL:  "https://api.example.com/plugins/${PLUGIN_NAME}/${PLUGIN_VERSION}",
 		}
 
-		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion)
+		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion, "")
 
 		expected := "https://api.example.com/plugins/my-plugin/1.0.0"
 		if result.URL != expected {
@@ -705,7 +705,7 @@ func TestSubstituteVariables(t *testing.T) {
 			Args:    []string{"server.js"},
 		}
 
-		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion)
+		result := mgr.substituteVariables(server, pluginPath, pluginName, pluginVersion, "")
 
 		if result.Command != "node" {
 			t.Errorf("Expected command 'node', got '%s'", result.Command)
@@ -717,9 +717,334 @@ func TestSubstituteVariables(t *testing.T) {
 	})
 }
 
+func TestSubstitutePluginData(t *testing.T) {
+	t.Run("substitutes CLAUDE_PLUGIN_DATA in command", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		pluginDataDir := filepath.Join(dataDir, "my-plugin-test-market")
+		server := MCPServer{
+			Command: "${CLAUDE_PLUGIN_DATA}/bin/server",
+			Args:    []string{"--data", "${CLAUDE_PLUGIN_DATA}"},
+			Env: map[string]string{
+				"DATA_DIR": "${CLAUDE_PLUGIN_DATA}",
+			},
+		}
+
+		result := mgr.substituteVariables(server, "/plugin/path", "my-plugin", "1.0.0", pluginDataDir)
+
+		expected := filepath.Join(dataDir, "my-plugin-test-market", "bin/server")
+		if result.Command != expected {
+			t.Errorf("Expected command '%s', got '%s'", expected, result.Command)
+		}
+		if result.Args[1] != pluginDataDir {
+			t.Errorf("Expected arg '%s', got '%s'", pluginDataDir, result.Args[1])
+		}
+		if result.Env["DATA_DIR"] != pluginDataDir {
+			t.Errorf("Expected env DATA_DIR '%s', got '%s'", pluginDataDir, result.Env["DATA_DIR"])
+		}
+	})
+
+	t.Run("substitution does not create CLAUDE_PLUGIN_DATA directory directly", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		pluginDataDir := filepath.Join(dataDir, "my-plugin-test-market")
+		server := MCPServer{
+			Command: "${CLAUDE_PLUGIN_DATA}/run",
+		}
+
+		mgr.substituteVariables(server, "/plugin/path", "my-plugin", "1.0.0", pluginDataDir)
+
+		if _, err := os.Stat(pluginDataDir); !os.IsNotExist(err) {
+			t.Errorf("Expected directory '%s' not to be created directly", pluginDataDir)
+		}
+	})
+
+	t.Run("different marketplaces get different data paths", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		dataDir1 := filepath.Join(dataDir, "market-a", "my-plugin")
+		dataDir2 := filepath.Join(dataDir, "market-b", "my-plugin")
+
+		server := MCPServer{Command: "${CLAUDE_PLUGIN_DATA}/run"}
+
+		result1 := mgr.substituteVariables(server, "/p1", "my-plugin", "1.0.0", dataDir1)
+		result2 := mgr.substituteVariables(server, "/p2", "my-plugin", "1.0.0", dataDir2)
+
+		if result1.Command == result2.Command {
+			t.Errorf("Expected different data paths for different marketplaces, got same: %s", result1.Command)
+		}
+	})
+
+	t.Run("does not substitute headers", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		pluginDataDir := filepath.Join(dataDir, "my-plugin-test-market")
+		server := MCPServer{
+			Type:    "http",
+			URL:     "https://api.example.com/mcp",
+			Headers: map[string]string{"Authorization": "Bearer ${CLAUDE_PLUGIN_DATA}"},
+		}
+
+		result := mgr.substituteVariables(server, "/plugin/path", "my-plugin", "1.0.0", pluginDataDir)
+
+		if result.Headers["Authorization"] != "Bearer ${CLAUDE_PLUGIN_DATA}" {
+			t.Errorf("Headers should not be substituted, got '%s'", result.Headers["Authorization"])
+		}
+	})
+
+	t.Run("does not substitute unrelated env placeholders", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		pluginDataDir := filepath.Join(dataDir, "my-plugin-test-market")
+		server := MCPServer{
+			Command: "${CLAUDE_PLUGIN_DATA}/bin/server",
+			Env: map[string]string{
+				"GITHUB_TOKEN": "${GITHUB_TOKEN}",
+				"API_KEY":      "${API_KEY}",
+			},
+		}
+
+		result := mgr.substituteVariables(server, "/plugin/path", "my-plugin", "1.0.0", pluginDataDir)
+
+		if result.Env["GITHUB_TOKEN"] != "${GITHUB_TOKEN}" {
+			t.Errorf("Expected GITHUB_TOKEN untouched, got '%s'", result.Env["GITHUB_TOKEN"])
+		}
+		if result.Env["API_KEY"] != "${API_KEY}" {
+			t.Errorf("Expected API_KEY untouched, got '%s'", result.Env["API_KEY"])
+		}
+	})
+
+	t.Run("empty pluginDataDir does not substitute", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		mgr := NewManager(tmpDir, "")
+
+		server := MCPServer{
+			Command: "${CLAUDE_PLUGIN_DATA}/bin/server",
+		}
+
+		result := mgr.substituteVariables(server, "/plugin/path", "my-plugin", "1.0.0", "")
+
+		if result.Command != "${CLAUDE_PLUGIN_DATA}/bin/server" {
+			t.Errorf("Expected no substitution when pluginDataDir is empty, got '%s'", result.Command)
+		}
+	})
+}
+
+func TestInstallMCPConfigWithPluginData(t *testing.T) {
+	t.Run("resolves CLAUDE_PLUGIN_DATA via InstallMCPConfig", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		pluginDir := filepath.Join(tmpDir, "my-plugin")
+		pluginJSONDir := filepath.Join(pluginDir, ".claude-plugin")
+		os.MkdirAll(pluginJSONDir, 0755)
+
+		os.WriteFile(filepath.Join(pluginJSONDir, "plugin.json"), []byte(`{"name": "my-plugin", "version": "2.0.0"}`), 0644)
+		os.WriteFile(filepath.Join(pluginDir, ".mcp.json"), []byte(`{
+			"my-server": {
+				"command": "${CLAUDE_PLUGIN_DATA}/bin/server",
+				"args": ["--root", "${CLAUDE_PLUGIN_ROOT}"],
+				"env": {
+					"DATA": "${CLAUDE_PLUGIN_DATA}",
+					"NAME": "${PLUGIN_NAME}",
+					"TOKEN": "${GITHUB_TOKEN}"
+				}
+			}
+		}`), 0644)
+
+		if err := mgr.InstallMCPConfig(pluginDir, "my-plugin", "my-market"); err != nil {
+			t.Fatalf("InstallMCPConfig failed: %v", err)
+		}
+
+		expectedDataDir := filepath.Join(dataDir, "my-market", "my-plugin")
+		if _, err := os.Stat(expectedDataDir); os.IsNotExist(err) {
+			t.Errorf("Expected data directory '%s' to be created", expectedDataDir)
+		}
+
+		configPath := filepath.Join(tmpDir, "opencode.json")
+		data, _ := os.ReadFile(configPath)
+
+		var config map[string]json.RawMessage
+		json.Unmarshal(data, &config)
+
+		var mcp map[string]OpenCodeMCPServer
+		json.Unmarshal(config["mcp"], &mcp)
+
+		server := mcp["my-plugin.my-server"]
+		expectedCmd := filepath.Join(dataDir, "my-market", "my-plugin", "bin", "server")
+		if server.Command[0] != expectedCmd {
+			t.Errorf("Expected command[0] '%s', got '%s'", expectedCmd, server.Command[0])
+		}
+		if server.Command[2] != pluginDir {
+			t.Errorf("Expected CLAUDE_PLUGIN_ROOT substituted to '%s', got '%s'", pluginDir, server.Command[2])
+		}
+		if server.Environment["DATA"] != expectedDataDir {
+			t.Errorf("Expected env DATA '%s', got '%s'", expectedDataDir, server.Environment["DATA"])
+		}
+		if server.Environment["NAME"] != "my-plugin" {
+			t.Errorf("Expected env NAME 'my-plugin', got '%s'", server.Environment["NAME"])
+		}
+		if server.Environment["TOKEN"] != "${GITHUB_TOKEN}" {
+			t.Errorf("Expected env TOKEN untouched, got '%s'", server.Environment["TOKEN"])
+		}
+	})
+
+	t.Run("same plugin name different markets get different data dirs", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		pluginDir1 := filepath.Join(tmpDir, "plugin-a")
+		os.MkdirAll(filepath.Join(pluginDir1, ".claude-plugin"), 0755)
+		os.WriteFile(filepath.Join(pluginDir1, ".claude-plugin", "plugin.json"), []byte(`{"name": "my-plugin", "version": "1.0.0"}`), 0644)
+		os.WriteFile(filepath.Join(pluginDir1, ".mcp.json"), []byte(`{"srv": {"command": "${CLAUDE_PLUGIN_DATA}/run"}}`), 0644)
+
+		pluginDir2 := filepath.Join(tmpDir, "plugin-b")
+		os.MkdirAll(filepath.Join(pluginDir2, ".claude-plugin"), 0755)
+		os.WriteFile(filepath.Join(pluginDir2, ".claude-plugin", "plugin.json"), []byte(`{"name": "my-plugin", "version": "1.0.0"}`), 0644)
+		os.WriteFile(filepath.Join(pluginDir2, ".mcp.json"), []byte(`{"srv": {"command": "${CLAUDE_PLUGIN_DATA}/run"}}`), 0644)
+
+		mgr.InstallMCPConfig(pluginDir1, "my-plugin", "market-a")
+		mgr.InstallMCPConfig(pluginDir2, "my-plugin", "market-b")
+
+		data1 := filepath.Join(dataDir, "market-a", "my-plugin")
+		data2 := filepath.Join(dataDir, "market-b", "my-plugin")
+		if _, err := os.Stat(data1); os.IsNotExist(err) {
+			t.Errorf("Expected data dir for market-a to exist")
+		}
+		if _, err := os.Stat(data2); os.IsNotExist(err) {
+			t.Errorf("Expected data dir for market-b to exist")
+		}
+		if data1 == data2 {
+			t.Errorf("Expected different data paths, both got '%s'", data1)
+		}
+	})
+
+	t.Run("plugin and market names do not collide after sanitization", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		pluginDir1 := filepath.Join(tmpDir, "plugin-one")
+		os.MkdirAll(filepath.Join(pluginDir1, ".claude-plugin"), 0755)
+		os.WriteFile(filepath.Join(pluginDir1, ".claude-plugin", "plugin.json"), []byte(`{"name": "a-b", "version": "1.0.0"}`), 0644)
+		os.WriteFile(filepath.Join(pluginDir1, ".mcp.json"), []byte(`{"srv": {"command": "${CLAUDE_PLUGIN_DATA}/run"}}`), 0644)
+
+		pluginDir2 := filepath.Join(tmpDir, "plugin-two")
+		os.MkdirAll(filepath.Join(pluginDir2, ".claude-plugin"), 0755)
+		os.WriteFile(filepath.Join(pluginDir2, ".claude-plugin", "plugin.json"), []byte(`{"name": "a", "version": "1.0.0"}`), 0644)
+		os.WriteFile(filepath.Join(pluginDir2, ".mcp.json"), []byte(`{"srv": {"command": "${CLAUDE_PLUGIN_DATA}/run"}}`), 0644)
+
+		if err := mgr.InstallMCPConfig(pluginDir1, "a-b", "c"); err != nil {
+			t.Fatal(err)
+		}
+		if err := mgr.InstallMCPConfig(pluginDir2, "a", "b-c"); err != nil {
+			t.Fatal(err)
+		}
+
+		data1 := filepath.Join(dataDir, "c", "a-b")
+		data2 := filepath.Join(dataDir, "b-c", "a")
+		if data1 == data2 {
+			t.Fatalf("expected non-colliding paths")
+		}
+		if _, err := os.Stat(data1); os.IsNotExist(err) {
+			t.Errorf("expected first data dir to exist")
+		}
+		if _, err := os.Stat(data2); os.IsNotExist(err) {
+			t.Errorf("expected second data dir to exist")
+		}
+	})
+
+	t.Run("fails when CLAUDE_PLUGIN_DATA directory cannot be created", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataPath := filepath.Join(tmpDir, "data-file")
+		if err := os.WriteFile(dataPath, []byte("not a directory"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		mgr := NewManager(tmpDir, dataPath)
+
+		pluginDir := filepath.Join(tmpDir, "plugin")
+		os.MkdirAll(filepath.Join(pluginDir, ".claude-plugin"), 0755)
+		os.WriteFile(filepath.Join(pluginDir, ".claude-plugin", "plugin.json"), []byte(`{"name": "plugin", "version": "1.0.0"}`), 0644)
+		os.WriteFile(filepath.Join(pluginDir, ".mcp.json"), []byte(`{"srv": {"command": "${CLAUDE_PLUGIN_DATA}/run"}}`), 0644)
+
+		if err := mgr.InstallMCPConfig(pluginDir, "plugin", "market"); err == nil {
+			t.Fatal("expected InstallMCPConfig to fail")
+		}
+	})
+
+	t.Run("preserves existing substitutions alongside CLAUDE_PLUGIN_DATA", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		dataDir := filepath.Join(tmpDir, "data")
+		mgr := NewManager(tmpDir, dataDir)
+
+		pluginDir := filepath.Join(tmpDir, "test-plugin")
+		pluginJSONDir := filepath.Join(pluginDir, ".claude-plugin")
+		os.MkdirAll(pluginJSONDir, 0755)
+
+		os.WriteFile(filepath.Join(pluginJSONDir, "plugin.json"), []byte(`{"name": "test-plugin", "version": "3.1.0"}`), 0644)
+		os.WriteFile(filepath.Join(pluginDir, ".mcp.json"), []byte(`{
+			"server": {
+				"command": "${CLAUDE_PLUGIN_ROOT}/bin/${PLUGIN_NAME}-v${PLUGIN_VERSION}",
+				"args": ["--data", "${CLAUDE_PLUGIN_DATA}"],
+				"env": {
+					"ROOT": "${CLAUDE_PLUGIN_ROOT}",
+					"NAME": "${PLUGIN_NAME}",
+					"VER": "${PLUGIN_VERSION}",
+					"DATA": "${CLAUDE_PLUGIN_DATA}"
+				}
+			}
+		}`), 0644)
+
+		mgr.InstallMCPConfig(pluginDir, "test-plugin", "test-market")
+
+		configData, _ := os.ReadFile(filepath.Join(tmpDir, "opencode.json"))
+		var config map[string]json.RawMessage
+		json.Unmarshal(configData, &config)
+		var mcp map[string]OpenCodeMCPServer
+		json.Unmarshal(config["mcp"], &mcp)
+
+		server := mcp["test-plugin.server"]
+
+		expectedCmd := filepath.Join(pluginDir, "bin", "test-plugin-v3.1.0")
+		if server.Command[0] != expectedCmd {
+			t.Errorf("Expected command '%s', got '%s'", expectedCmd, server.Command[0])
+		}
+
+		expectedData := filepath.Join(dataDir, "test-market", "test-plugin")
+		if server.Command[2] != expectedData {
+			t.Errorf("Expected arg '%s', got '%s'", expectedData, server.Command[2])
+		}
+
+		if server.Environment["ROOT"] != pluginDir {
+			t.Errorf("Expected ROOT '%s', got '%s'", pluginDir, server.Environment["ROOT"])
+		}
+		if server.Environment["NAME"] != "test-plugin" {
+			t.Errorf("Expected NAME 'test-plugin', got '%s'", server.Environment["NAME"])
+		}
+		if server.Environment["VER"] != "3.1.0" {
+			t.Errorf("Expected VER '3.1.0', got '%s'", server.Environment["VER"])
+		}
+		if server.Environment["DATA"] != expectedData {
+			t.Errorf("Expected DATA '%s', got '%s'", expectedData, server.Environment["DATA"])
+		}
+	})
+}
+
 func TestToOpenCodeServer(t *testing.T) {
 	t.Run("stdio server converts to local", func(t *testing.T) {
-		mgr := NewManager(t.TempDir())
+		mgr := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "data"))
 		server := MCPServer{
 			Command: "npx",
 			Args:    []string{"-y", "@playwright/mcp@latest"},
@@ -743,7 +1068,7 @@ func TestToOpenCodeServer(t *testing.T) {
 	})
 
 	t.Run("http server converts to remote", func(t *testing.T) {
-		mgr := NewManager(t.TempDir())
+		mgr := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "data"))
 		server := MCPServer{
 			Type:    "http",
 			URL:     "https://api.githubcopilot.com/mcp/",
@@ -764,7 +1089,7 @@ func TestToOpenCodeServer(t *testing.T) {
 	})
 
 	t.Run("sse server converts to remote", func(t *testing.T) {
-		mgr := NewManager(t.TempDir())
+		mgr := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "data"))
 		server := MCPServer{Type: "sse", URL: "https://example.com/sse"}
 
 		oc := mgr.toOpenCodeServer(server)
@@ -775,7 +1100,7 @@ func TestToOpenCodeServer(t *testing.T) {
 	})
 
 	t.Run("stdio with no args", func(t *testing.T) {
-		mgr := NewManager(t.TempDir())
+		mgr := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "data"))
 		server := MCPServer{Command: "node"}
 
 		oc := mgr.toOpenCodeServer(server)
@@ -788,7 +1113,7 @@ func TestToOpenCodeServer(t *testing.T) {
 
 func TestFromOpenCodeServer(t *testing.T) {
 	t.Run("local converts to stdio", func(t *testing.T) {
-		mgr := NewManager(t.TempDir())
+		mgr := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "data"))
 		oc := OpenCodeMCPServer{
 			Type:    "local",
 			Command: []string{"npx", "-y", "server"},
@@ -815,7 +1140,7 @@ func TestFromOpenCodeServer(t *testing.T) {
 	})
 
 	t.Run("remote converts to http", func(t *testing.T) {
-		mgr := NewManager(t.TempDir())
+		mgr := NewManager(t.TempDir(), filepath.Join(t.TempDir(), "data"))
 		oc := OpenCodeMCPServer{
 			Type:    "remote",
 			URL:     "https://api.example.com/mcp",
@@ -837,7 +1162,7 @@ func TestFromOpenCodeServer(t *testing.T) {
 func TestListMCPServers(t *testing.T) {
 	t.Run("lists servers from opencode.json", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		content := `{
 			"mcp": {
@@ -890,7 +1215,7 @@ func TestListMCPServers(t *testing.T) {
 
 	t.Run("returns empty map when no config file", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		mgr := NewManager(tmpDir)
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
 
 		servers, err := mgr.ListMCPServers()
 		if err != nil {

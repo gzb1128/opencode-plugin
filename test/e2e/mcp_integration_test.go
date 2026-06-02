@@ -24,7 +24,7 @@ func TestMCPIntegration(t *testing.T) {
 	}
 
 	paths := configMgr.GetPaths()
-	mcpMgr := mcp.NewManager(paths.OpenCodeConfig)
+	mcpMgr := mcp.NewManager(paths.OpenCodeConfig, paths.PluginDataDir)
 
 	t.Run("initial state - no MCP servers", func(t *testing.T) {
 		servers, err := mcpMgr.ListMCPServers()
@@ -81,7 +81,7 @@ func TestMCPIntegration(t *testing.T) {
 			t.Fatalf("Failed to write .mcp.json: %v", err)
 		}
 
-		if err := mcpMgr.InstallMCPConfig(pluginDir, "test-mcp-plugin"); err != nil {
+		if err := mcpMgr.InstallMCPConfig(pluginDir, "test-mcp-plugin", "test-market"); err != nil {
 			t.Fatalf("InstallMCPConfig failed: %v", err)
 		}
 
@@ -176,7 +176,7 @@ func TestMCPIntegration(t *testing.T) {
 				t.Fatalf("Failed to write .mcp.json: %v", err)
 			}
 
-			if err := mcpMgr.InstallMCPConfig(pluginDir, pluginName); err != nil {
+			if err := mcpMgr.InstallMCPConfig(pluginDir, pluginName, "test-market"); err != nil {
 				t.Fatalf("InstallMCPConfig failed for %s: %v", pluginName, err)
 			}
 		}
@@ -242,10 +242,10 @@ func TestRealMCPPlugin(t *testing.T) {
 	}
 
 	paths := configMgr.GetPaths()
-	mcpMgr := mcp.NewManager(paths.OpenCodeConfig)
+	mcpMgr := mcp.NewManager(paths.OpenCodeConfig, paths.PluginDataDir)
 
 	t.Run("install GitHub plugin MCP config", func(t *testing.T) {
-		if err := mcpMgr.InstallMCPConfig(githubPluginPath, "github"); err != nil {
+		if err := mcpMgr.InstallMCPConfig(githubPluginPath, "github", "test-market"); err != nil {
 			t.Fatalf("InstallMCPConfig failed: %v", err)
 		}
 

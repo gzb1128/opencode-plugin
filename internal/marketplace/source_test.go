@@ -43,6 +43,11 @@ func TestParseMarketplaceSource(t *testing.T) {
 			url:      "https://example.com/marketplace.json",
 			wantType: "url",
 		},
+		{
+			name:     "marketplace.json URL with query string",
+			url:      "https://example.com/marketplace.json?token=abc",
+			wantType: "url",
+		},
 	}
 
 	for _, tt := range tests {
@@ -525,8 +530,8 @@ func TestParseMarketplaceSource_InputParity(t *testing.T) {
 
 func TestSplitSourceRef(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
+		name     string
+		input    string
 		wantBase string
 		wantRef  string
 	}{
@@ -584,4 +589,121 @@ func TestParseMarketplaceSource_HomePathExpansion(t *testing.T) {
 			t.Errorf("expected unsupported format error, got: %v", err)
 		}
 	})
+}
+
+func TestParseMarketplaceSource_RefPinning(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantType   string
+		assertFunc func(t *testing.T, src MarketSource)
+	}{
+		{
+			name:     "GitHub shorthand at ref v2.0",
+			input:    "owner/repo@v2.0",
+			wantType: "github",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitHubMarketSource)
+				if s.Repo != "owner/repo" {
+					t.Errorf("Repo = %v, want owner/repo", s.Repo)
+				}
+				if s.Ref != "v2.0" {
+					t.Errorf("Ref = %v, want v2.0", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "GitLab HTTPS with hash ref",
+			input:    "https://gitlab.example.com/team/plugins.git#main",
+			wantType: "git",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitMarketSource)
+				if s.URL != "https://gitlab.example.com/team/plugins.git" {
+					t.Errorf("URL = %v, want https://gitlab.example.com/team/plugins.git", s.URL)
+				}
+				if s.Ref != "main" {
+					t.Errorf("Ref = %v, want main", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "SSH protocol URL with hash ref",
+			input:    "ssh://git@host/repo.git#ref",
+			wantType: "git",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitMarketSource)
+				if s.URL != "ssh://git@host/repo.git" {
+					t.Errorf("URL = %v, want ssh://git@host/repo.git", s.URL)
+				}
+				if s.Ref != "ref" {
+					t.Errorf("Ref = %v, want ref", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "SSH protocol URL without ref",
+			input:    "ssh://git@host/repo.git",
+			wantType: "git",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitMarketSource)
+				if s.URL != "ssh://git@host/repo.git" {
+					t.Errorf("URL = %v, want ssh://git@host/repo.git", s.URL)
+				}
+				if s.Ref != "" {
+					t.Errorf("Ref = %v, want empty", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "SSH SCP style not split on at",
+			input:    "git@github.com:owner/repo.git",
+			wantType: "git",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*GitMarketSource)
+				if s.URL != "git@github.com:owner/repo.git" {
+					t.Errorf("URL = %v, want git@github.com:owner/repo.git", s.URL)
+				}
+				if s.Ref != "" {
+					t.Errorf("Ref = %v, want empty", s.Ref)
+				}
+			},
+		},
+		{
+			name:     "marketplace.json URL preserves fragment",
+			input:    "https://example.com/marketplace.json#section",
+			wantType: "url",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*URLMarketSource)
+				if s.URL != "https://example.com/marketplace.json#section" {
+					t.Errorf("URL = %v, want https://example.com/marketplace.json#section", s.URL)
+				}
+			},
+		},
+		{
+			name:     "marketplace.json URL without fragment",
+			input:    "https://example.com/marketplace.json",
+			wantType: "url",
+			assertFunc: func(t *testing.T, src MarketSource) {
+				s := src.(*URLMarketSource)
+				if s.URL != "https://example.com/marketplace.json" {
+					t.Errorf("URL = %v, want https://example.com/marketplace.json", s.URL)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseMarketplaceSource(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.SourceType() != tt.wantType {
+				t.Errorf("SourceType() = %v, want %v", result.SourceType(), tt.wantType)
+			}
+			if tt.assertFunc != nil {
+				tt.assertFunc(t, result)
+			}
+		})
+	}
 }

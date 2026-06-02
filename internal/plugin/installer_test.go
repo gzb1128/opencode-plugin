@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,7 +29,7 @@ func setupInstallerTest(t *testing.T) (*Installer, string) {
 		configMgr:  mgr,
 		linker:     opencode.NewLinker(paths.AgentsDir),
 		marketMgr:  marketplace.NewManager(paths.MarketsDir),
-		mcpManager: mcp.NewManager(paths.OpenCodeConfig),
+		mcpManager: mcp.NewManager(paths.OpenCodeConfig, paths.PluginDataDir),
 	}
 
 	return installer, paths.BaseDir
@@ -174,6 +175,265 @@ func TestInstall_DependencyAlreadyInstalled(t *testing.T) {
 
 	installer.configMgr.RemoveInstallRecord("dep@test-market")
 	installer.configMgr.RemoveInstallRecord("root@test-market")
+}
+
+func TestCleanupOldVersions_RemovesUnreferencedSibling(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+	cacheDir := paths.CacheDir
+
+	currentPath := filepath.Join(cacheDir, "market", "plugin", "v2")
+	oldPath := filepath.Join(cacheDir, "market", "plugin", "v1")
+	os.MkdirAll(currentPath, 0755)
+	os.MkdirAll(oldPath, 0755)
+
+	installer.configMgr.AddInstallRecord("plugin@market", &config.InstallRecord{
+		InstallPath: currentPath,
+		Version:     "v2",
+	})
+
+	if err := installer.CleanupOldVersions(currentPath); err != nil {
+		t.Fatalf("CleanupOldVersions() error = %v", err)
+	}
+
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Error("old version should have been removed")
+	}
+
+	if _, err := os.Stat(currentPath); os.IsNotExist(err) {
+		t.Error("current version should still exist")
+	}
+}
+
+func TestCleanupOldVersions_KeepsCurrentVersion(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+	cacheDir := paths.CacheDir
+
+	currentPath := filepath.Join(cacheDir, "market", "plugin", "v2")
+	os.MkdirAll(currentPath, 0755)
+
+	installer.configMgr.AddInstallRecord("plugin@market", &config.InstallRecord{
+		InstallPath: currentPath,
+		Version:     "v2",
+	})
+
+	if err := installer.CleanupOldVersions(currentPath); err != nil {
+		t.Fatalf("CleanupOldVersions() error = %v", err)
+	}
+
+	if _, err := os.Stat(currentPath); os.IsNotExist(err) {
+		t.Error("current version should still exist")
+	}
+}
+
+func TestCleanupOldVersions_KeepsReferencedSibling(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+	cacheDir := paths.CacheDir
+
+	currentPath := filepath.Join(cacheDir, "market", "plugin", "v2")
+	referencedPath := filepath.Join(cacheDir, "market", "plugin", "v1")
+	os.MkdirAll(currentPath, 0755)
+	os.MkdirAll(referencedPath, 0755)
+
+	installer.configMgr.AddInstallRecord("plugin@market", &config.InstallRecord{
+		InstallPath: currentPath,
+		Version:     "v2",
+	})
+	installer.configMgr.AddInstallRecord("other-plugin@market", &config.InstallRecord{
+		InstallPath: referencedPath,
+		Version:     "v1",
+	})
+
+	if err := installer.CleanupOldVersions(currentPath); err != nil {
+		t.Fatalf("CleanupOldVersions() error = %v", err)
+	}
+
+	if _, err := os.Stat(referencedPath); os.IsNotExist(err) {
+		t.Error("referenced sibling should not be removed")
+	}
+}
+
+func TestCleanupOldVersions_RefusesPathOutsideCache(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+
+	outsidePath := filepath.Join(t.TempDir(), "plugin", "v1")
+	os.MkdirAll(outsidePath, 0755)
+
+	err := installer.CleanupOldVersions(outsidePath)
+	if err == nil {
+		t.Fatal("expected error for path outside cache directory")
+	}
+}
+
+func TestCleanupOldVersions_RefusesMalformedPathInsideCache(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+
+	shallowPath := filepath.Join(paths.CacheDir, "market")
+	os.MkdirAll(shallowPath, 0755)
+
+	err := installer.CleanupOldVersions(shallowPath)
+	if err == nil {
+		t.Fatal("expected error for malformed path (not deep enough)")
+	}
+}
+
+func TestCleanupOldVersions_SkipsSymlinkSiblings(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+	cacheDir := paths.CacheDir
+
+	currentPath := filepath.Join(cacheDir, "market", "plugin", "v2")
+	linkTarget := t.TempDir()
+	linkPath := filepath.Join(cacheDir, "market", "plugin", "link-version")
+	os.MkdirAll(currentPath, 0755)
+	os.Symlink(linkTarget, linkPath)
+
+	installer.configMgr.AddInstallRecord("plugin@market", &config.InstallRecord{
+		InstallPath: currentPath,
+		Version:     "v2",
+	})
+
+	if err := installer.CleanupOldVersions(currentPath); err != nil {
+		t.Fatalf("CleanupOldVersions() error = %v", err)
+	}
+
+	if _, err := os.Lstat(linkPath); os.IsNotExist(err) {
+		t.Error("symlink sibling should not be removed")
+	}
+}
+
+func TestCleanupOldVersions_HandlesMissingDirectory(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+	cacheDir := paths.CacheDir
+
+	missingPath := filepath.Join(cacheDir, "market", "plugin", "v1")
+
+	err := installer.CleanupOldVersions(missingPath)
+	if err == nil {
+		t.Fatal("expected error for nonexistent current install path")
+	}
+}
+
+func TestGenerateFallbackManifest_IncludesDisplayName(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+
+	cachePath := filepath.Join(t.TempDir(), "cache", "tool@market", "v1")
+	os.MkdirAll(cachePath, 0755)
+
+	plugin := &marketplace.Plugin{
+		Name:        "tool",
+		DisplayName: "Tool Pro",
+		Description: "A tool plugin",
+	}
+
+	if err := installer.generateFallbackManifest(plugin, cachePath); err != nil {
+		t.Fatalf("generateFallbackManifest() error = %v", err)
+	}
+
+	manifestPath := filepath.Join(cachePath, ".claude-plugin", "plugin.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("failed to read manifest: %v", err)
+	}
+
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("failed to parse manifest: %v", err)
+	}
+
+	if manifest["name"] != "tool" {
+		t.Errorf("name = %v, want tool", manifest["name"])
+	}
+	if manifest["displayName"] != "Tool Pro" {
+		t.Errorf("displayName = %v, want 'Tool Pro'", manifest["displayName"])
+	}
+}
+
+func TestGenerateFallbackManifest_SkipsDisplayNameWhenEmpty(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+
+	cachePath := filepath.Join(t.TempDir(), "cache", "plain@market", "v1")
+	os.MkdirAll(cachePath, 0755)
+
+	plugin := &marketplace.Plugin{
+		Name:        "plain",
+		Description: "A plain plugin",
+	}
+
+	if err := installer.generateFallbackManifest(plugin, cachePath); err != nil {
+		t.Fatalf("generateFallbackManifest() error = %v", err)
+	}
+
+	manifestPath := filepath.Join(cachePath, ".claude-plugin", "plugin.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("failed to read manifest: %v", err)
+	}
+
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("failed to parse manifest: %v", err)
+	}
+
+	if _, ok := manifest["displayName"]; ok {
+		t.Error("displayName should not be present when empty")
+	}
+}
+
+func TestInstall_DisplayNameDoesNotAffectPluginID(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	marketPath := filepath.Join(tmpDir, "market")
+	pluginSrcPath := filepath.Join(marketPath, "plugins", "tool")
+	os.MkdirAll(filepath.Join(pluginSrcPath, "skills"), 0755)
+	os.WriteFile(filepath.Join(pluginSrcPath, "skills", "tool-skill.md"), []byte("# Tool Skill"), 0644)
+
+	manifestDir := filepath.Join(pluginSrcPath, ".claude-plugin")
+	os.MkdirAll(manifestDir, 0755)
+	os.WriteFile(filepath.Join(manifestDir, "plugin.json"), []byte(`{"name":"tool","version":"1.0.0"}`), 0644)
+
+	marketJSON := `{
+  "name": "test-market",
+  "plugins": [
+    {
+      "name": "tool",
+      "displayName": "Tool Pro",
+      "description": "A tool plugin",
+      "source": "./plugins/tool"
+    }
+  ]
+}`
+
+	indexPath := filepath.Join(marketPath, ".claude-plugin", "marketplace.json")
+	os.MkdirAll(filepath.Dir(indexPath), 0755)
+	os.WriteFile(indexPath, []byte(marketJSON), 0755)
+
+	installer, _ := setupInstallerTest(t)
+
+	src := &marketplace.LocalMarketSource{Path: marketPath}
+	src.SetInstallLocation(marketPath)
+
+	if err := installer.configMgr.AddKnownMarket("test-market", marketplace.MarketSourceToConfig(src)); err != nil {
+		t.Fatalf("AddKnownMarket error: %v", err)
+	}
+
+	if err := installer.Install("tool", InstallOptions{MarketName: "test-market", Scope: "user"}); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+
+	record, err := installer.configMgr.GetInstallRecord("tool@test-market")
+	if err != nil {
+		t.Fatalf("plugin should be installed as 'tool@test-market': %v", err)
+	}
+	if record.Version != "1.0.0" {
+		t.Errorf("version = %q, want 1.0.0", record.Version)
+	}
+
+	installer.configMgr.RemoveInstallRecord("tool@test-market")
 }
 
 func TestIsWithinDir(t *testing.T) {

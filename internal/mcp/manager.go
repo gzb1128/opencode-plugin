@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/opencode/plugin-cli/internal/pathutil"
 )
 
 type MCPServer struct {
@@ -51,12 +53,14 @@ type Author struct {
 }
 
 type Manager struct {
-	configDir string
+	configDir     string
+	pluginDataDir string
 }
 
-func NewManager(configDir string) *Manager {
+func NewManager(configDir string, pluginDataDir string) *Manager {
 	return &Manager{
-		configDir: configDir,
+		configDir:     configDir,
+		pluginDataDir: pluginDataDir,
 	}
 }
 
@@ -135,7 +139,7 @@ func (m *Manager) GetMCPServers(pluginPath string) (map[string]MCPServer, error)
 	return servers, nil
 }
 
-func (m *Manager) InstallMCPConfig(pluginPath, pluginName string) error {
+func (m *Manager) InstallMCPConfig(pluginPath, pluginName, marketName string) error {
 	servers, err := m.GetMCPServers(pluginPath)
 	if err != nil {
 		return err
@@ -151,6 +155,16 @@ func (m *Manager) InstallMCPConfig(pluginPath, pluginName string) error {
 		pluginVersion = pluginInfo.Version
 	}
 
+	var pluginDataDir string
+	if m.pluginDataDir != "" && pluginName != "" && marketName != "" {
+		pluginDataDir = filepath.Join(m.pluginDataDir, pathutil.SanitizeAlias(marketName), pathutil.SanitizeAlias(pluginName))
+		if usesPluginData(servers) {
+			if err := os.MkdirAll(pluginDataDir, 0755); err != nil {
+				return fmt.Errorf("failed to create plugin data directory: %w", err)
+			}
+		}
+	}
+
 	opencodeConfig, err := m.readOpenCodeConfig()
 	if err != nil {
 		return err
@@ -163,11 +177,30 @@ func (m *Manager) InstallMCPConfig(pluginPath, pluginName string) error {
 	for serverName, server := range servers {
 		fullName := fmt.Sprintf("%s.%s", pluginName, serverName)
 
-		server = m.substituteVariables(server, pluginPath, pluginName, pluginVersion)
+		server = m.substituteVariables(server, pluginPath, pluginName, pluginVersion, pluginDataDir)
 		opencodeConfig.MCP[fullName] = m.toOpenCodeServer(server)
 	}
 
 	return m.writeOpenCodeConfig(opencodeConfig)
+}
+
+func usesPluginData(servers map[string]MCPServer) bool {
+	for _, server := range servers {
+		if strings.Contains(server.Command, "${CLAUDE_PLUGIN_DATA}") || strings.Contains(server.URL, "${CLAUDE_PLUGIN_DATA}") {
+			return true
+		}
+		for _, arg := range server.Args {
+			if strings.Contains(arg, "${CLAUDE_PLUGIN_DATA}") {
+				return true
+			}
+		}
+		for _, value := range server.Env {
+			if strings.Contains(value, "${CLAUDE_PLUGIN_DATA}") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *Manager) UninstallMCPConfig(pluginName string) error {
@@ -325,48 +358,43 @@ func (m *Manager) opencodeConfigPath() string {
 	return filepath.Join(m.configDir, "opencode.json")
 }
 
-func (m *Manager) substituteVariables(server MCPServer, pluginPath, pluginName, pluginVersion string) MCPServer {
+func (m *Manager) substituteVariables(server MCPServer, pluginPath, pluginName, pluginVersion, pluginDataDir string) MCPServer {
 	result := server
 
 	if server.Command != "" {
-		result.Command = m.substituteString(server.Command, pluginPath, pluginName, pluginVersion)
+		result.Command = m.substituteString(server.Command, pluginPath, pluginName, pluginVersion, pluginDataDir)
 	}
 
 	if server.Args != nil {
 		result.Args = make([]string, len(server.Args))
 		for i, arg := range server.Args {
-			result.Args[i] = m.substituteString(arg, pluginPath, pluginName, pluginVersion)
+			result.Args[i] = m.substituteString(arg, pluginPath, pluginName, pluginVersion, pluginDataDir)
 		}
 	}
 
 	if server.URL != "" {
-		result.URL = m.substituteString(server.URL, pluginPath, pluginName, pluginVersion)
+		result.URL = m.substituteString(server.URL, pluginPath, pluginName, pluginVersion, pluginDataDir)
 	}
 
 	if server.Env != nil {
 		result.Env = make(map[string]string)
 		for key, value := range server.Env {
-			result.Env[key] = m.substituteString(value, pluginPath, pluginName, pluginVersion)
+			result.Env[key] = m.substituteString(value, pluginPath, pluginName, pluginVersion, pluginDataDir)
 		}
 	}
 
 	return result
 }
 
-func (m *Manager) substituteString(str, pluginPath, pluginName, pluginVersion string) string {
+func (m *Manager) substituteString(str, pluginPath, pluginName, pluginVersion, pluginDataDir string) string {
 	result := str
 	result = strings.ReplaceAll(result, "${CLAUDE_PLUGIN_ROOT}", pluginPath)
 	result = strings.ReplaceAll(result, "${PLUGIN_NAME}", pluginName)
 	result = strings.ReplaceAll(result, "${PLUGIN_VERSION}", pluginVersion)
+	if pluginDataDir != "" {
+		result = strings.ReplaceAll(result, "${CLAUDE_PLUGIN_DATA}", pluginDataDir)
+	}
 	return result
-}
-
-func (m *Manager) substitutePluginRoot(server MCPServer, pluginPath string) MCPServer {
-	return m.substituteVariables(server, pluginPath, "", "")
-}
-
-func (m *Manager) substitutePath(str, pluginPath string) string {
-	return m.substituteString(str, pluginPath, "", "")
 }
 
 func NormalizeMCPServers(pluginPath string, raw json.RawMessage) (map[string]MCPServer, []string, error) {

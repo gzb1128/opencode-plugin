@@ -63,6 +63,15 @@ func ParseMarketplaceSource(url string) (MarketSource, error) {
 	}
 
 	base, ref := splitSourceRef(url)
+	baseNoQuery := base
+	if queryIdx := strings.Index(baseNoQuery, "?"); queryIdx >= 0 {
+		baseNoQuery = baseNoQuery[:queryIdx]
+	}
+	if strings.Contains(url, "://") && strings.HasSuffix(baseNoQuery, "marketplace.json") {
+		return &URLMarketSource{
+			URL: url,
+		}, nil
+	}
 
 	if matched := githubShorthandRegex.MatchString(base); matched {
 		return &GitHubMarketSource{
@@ -97,7 +106,7 @@ func ParseMarketplaceSource(url string) (MarketSource, error) {
 		}, nil
 	}
 
-	if strings.HasPrefix(base, "git@") || strings.HasPrefix(base, "https://") || strings.HasPrefix(base, "http://") || isSSHURL(base) {
+	if strings.HasPrefix(base, "git@") || strings.HasPrefix(base, "ssh://") || strings.HasPrefix(base, "https://") || strings.HasPrefix(base, "http://") || isSSHURL(base) {
 		return &GitMarketSource{
 			URL: base,
 			Ref: ref,

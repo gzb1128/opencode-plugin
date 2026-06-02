@@ -73,10 +73,10 @@ Examples:
 
 			var plugins []marketplace.Plugin
 
-			// Filter by keyword
 			if keyword != "" {
 				for _, p := range mp.Plugins {
 					if strings.Contains(strings.ToLower(p.Name), keyword) ||
+						strings.Contains(strings.ToLower(p.DisplayName), keyword) ||
 						strings.Contains(strings.ToLower(p.Description), keyword) {
 						plugins = append(plugins, p)
 					}
@@ -97,6 +97,9 @@ Examples:
 
 			for _, p := range plugins {
 				fmt.Printf("\n%s\n", p.Name)
+				if p.DisplayName != "" {
+					fmt.Printf("  Display Name: %s\n", p.DisplayName)
+				}
 				fmt.Printf("  %s\n", p.Description)
 				if p.Version != "" {
 					fmt.Printf("  Version: %s\n", p.Version)

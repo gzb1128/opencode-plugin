@@ -171,3 +171,134 @@ func TestMaterializePlugin_ExistingManifest(t *testing.T) {
 		t.Errorf("Version = %q, want 3.0.0", mat.Version)
 	}
 }
+
+func TestMaterializePlugin_FallbackManifestIncludesDisplayName(t *testing.T) {
+	tmpDir := t.TempDir()
+	marketPath := filepath.Join(tmpDir, "market")
+	pluginSrcPath := filepath.Join(marketPath, "plugins", "tool")
+	os.MkdirAll(pluginSrcPath, 0755)
+
+	marketJSON := `{
+  "name": "test-market",
+  "plugins": [
+    {
+      "name": "tool",
+      "displayName": "Tool Pro",
+      "description": "A tool plugin",
+      "version": "1.0.0",
+      "source": "./plugins/tool"
+    }
+  ]
+}`
+
+	indexPath := filepath.Join(marketPath, ".claude-plugin", "marketplace.json")
+	os.MkdirAll(filepath.Dir(indexPath), 0755)
+	os.WriteFile(indexPath, []byte(marketJSON), 0644)
+
+	mp, err := marketplace.ParseMarketplaceIndex(indexPath)
+	if err != nil {
+		t.Fatalf("ParseMarketplaceIndex() error = %v", err)
+	}
+
+	src := &marketplace.FileMarketSource{}
+	src.SetInstallLocation(marketPath)
+
+	resolved := &marketplace.ResolvedPlugin{
+		Plugin:      &mp.Plugins[0],
+		Market:      src,
+		MarketName:  "test-market",
+		Marketplace: mp,
+	}
+
+	mgr := newTestConfigManager(t)
+
+	installer := &Installer{
+		resolver:  NewVersionResolver(),
+		configMgr: mgr,
+	}
+
+	mat, err := installer.materializePlugin(resolved, InstallOptions{MarketName: "test-market"})
+	if err != nil {
+		t.Fatalf("materializePlugin() error = %v", err)
+	}
+
+	manifestData, err := os.ReadFile(mat.ManifestPath)
+	if err != nil {
+		t.Fatalf("failed to read manifest: %v", err)
+	}
+
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("failed to parse manifest: %v", err)
+	}
+
+	if manifest["name"] != "tool" {
+		t.Errorf("manifest name = %v, want tool", manifest["name"])
+	}
+	if manifest["displayName"] != "Tool Pro" {
+		t.Errorf("manifest displayName = %v, want 'Tool Pro'", manifest["displayName"])
+	}
+}
+
+func TestMaterializePlugin_FallbackManifestOmitsDisplayNameWhenEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	marketPath := filepath.Join(tmpDir, "market")
+	pluginSrcPath := filepath.Join(marketPath, "plugins", "tool")
+	os.MkdirAll(pluginSrcPath, 0755)
+
+	marketJSON := `{
+  "name": "test-market",
+  "plugins": [
+    {
+      "name": "tool",
+      "description": "A tool plugin",
+      "source": "./plugins/tool"
+    }
+  ]
+}`
+
+	indexPath := filepath.Join(marketPath, ".claude-plugin", "marketplace.json")
+	os.MkdirAll(filepath.Dir(indexPath), 0755)
+	os.WriteFile(indexPath, []byte(marketJSON), 0644)
+
+	mp, err := marketplace.ParseMarketplaceIndex(indexPath)
+	if err != nil {
+		t.Fatalf("ParseMarketplaceIndex() error = %v", err)
+	}
+
+	src := &marketplace.FileMarketSource{}
+	src.SetInstallLocation(marketPath)
+
+	resolved := &marketplace.ResolvedPlugin{
+		Plugin:      &mp.Plugins[0],
+		Market:      src,
+		MarketName:  "test-market",
+		Marketplace: mp,
+	}
+
+	mgr := newTestConfigManager(t)
+
+	installer := &Installer{
+		resolver:  NewVersionResolver(),
+		configMgr: mgr,
+	}
+
+	mat, err := installer.materializePlugin(resolved, InstallOptions{MarketName: "test-market"})
+	if err != nil {
+		t.Fatalf("materializePlugin() error = %v", err)
+	}
+
+	manifestData, err := os.ReadFile(mat.ManifestPath)
+	if err != nil {
+		t.Fatalf("failed to read manifest: %v", err)
+	}
+
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("failed to parse manifest: %v", err)
+	}
+
+	if _, ok := manifest["displayName"]; ok {
+		t.Error("manifest should NOT contain displayName when not set")
+	}
+}

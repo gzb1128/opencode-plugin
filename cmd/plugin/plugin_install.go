@@ -1,8 +1,10 @@
 package plugin
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/opencode/plugin-cli/internal/config"
@@ -120,6 +122,17 @@ var removeCmd = &cobra.Command{
 	},
 }
 
+type pluginJSONEntry struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Marketplace string `json:"marketplace"`
+	Version     string `json:"version"`
+	InstallPath string `json:"installPath"`
+	InstalledAt string `json:"installedAt"`
+}
+
+var listJSONFlag bool
+
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List installed plugins",
@@ -136,6 +149,11 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to list installed plugins: %v\n", err)
 			os.Exit(1)
+		}
+
+		if listJSONFlag {
+			printPluginsJSON(installed)
+			return
 		}
 
 		if len(installed) == 0 {
@@ -161,8 +179,40 @@ var listCmd = &cobra.Command{
 	},
 }
 
+func printPluginsJSON(installed map[string][]config.InstallRecord) {
+	entries := make([]pluginJSONEntry, 0, len(installed))
+	for key, records := range installed {
+		if len(records) == 0 {
+			continue
+		}
+		record := records[0]
+		name := key
+		market := ""
+		if idx := strings.LastIndex(key, "@"); idx > 0 {
+			name = key[:idx]
+			market = key[idx+1:]
+		}
+		entry := pluginJSONEntry{
+			Key:         key,
+			Name:        name,
+			Marketplace: market,
+			Version:     record.Version,
+			InstallPath: record.InstallPath,
+			InstalledAt: record.InstalledAt.Format("2006-01-02T15:04:05Z07:00"),
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Key < entries[j].Key
+	})
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(entries)
+}
+
 func init() {
 	installCmd.Flags().StringP("version", "v", "", "Plugin version to install")
+	listCmd.Flags().BoolVar(&listJSONFlag, "json", false, "Output as JSON")
 
 	Cmd.AddCommand(installCmd)
 	Cmd.AddCommand(removeCmd)

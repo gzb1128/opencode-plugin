@@ -84,9 +84,9 @@ func SafePluginCachePath(cacheDir, pluginID, version string) (string, error) {
 		pluginName = pluginID
 	}
 
-	sanitizedPlugin := sanitizeAlias(pluginName)
-	sanitizedMarket := sanitizeAlias(marketName)
-	sanitizedVersion := sanitizeAlias(version)
+	sanitizedPlugin := SanitizeAlias(pluginName)
+	sanitizedMarket := SanitizeAlias(marketName)
+	sanitizedVersion := SanitizeAlias(version)
 
 	if sanitizedPlugin == "" || sanitizedPlugin == "." || sanitizedPlugin == ".." {
 		return "", fmt.Errorf("invalid plugin name after sanitization: %q", pluginName)
@@ -116,12 +116,12 @@ func isWithinBase(path, base string) bool {
 	return strings.HasPrefix(path, base+string(filepath.Separator)) || path == base
 }
 
-func sanitizeAlias(alias string) string {
+func SanitizeAlias(alias string) string {
 	return safeCharRegex.ReplaceAllString(alias, "-")
 }
 
 func SafeMarketplaceCachePath(marketsDir, alias, suffix string) (string, error) {
-	sanitized := sanitizeAlias(alias)
+	sanitized := SanitizeAlias(alias)
 	if sanitized == "" || sanitized == "." || sanitized == ".." {
 		return "", fmt.Errorf("invalid alias after sanitization: %q (original: %q)", sanitized, alias)
 	}

@@ -162,3 +162,20 @@ func (m *Manager) GetInstallRecord(key string) (*InstallRecord, error) {
 func (m *Manager) GetPaths() *Paths {
 	return m.paths
 }
+
+func (m *Manager) GetAllInstallPaths() (map[string]bool, error) {
+	installed, err := m.LoadInstalledPlugins()
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make(map[string]bool)
+	for _, records := range installed.Plugins {
+		for _, record := range records {
+			if record.InstallPath != "" {
+				paths[record.InstallPath] = true
+			}
+		}
+	}
+	return paths, nil
+}
