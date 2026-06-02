@@ -126,7 +126,11 @@ func (l *Linker) linkComponentDir(pluginPath, component string, force bool) (int
 				}
 			}
 			if force {
-				if err := os.Remove(linkPath); err != nil {
+				removeFn := os.Remove
+				if info, err := os.Lstat(linkPath); err == nil && info.IsDir() {
+					removeFn = os.RemoveAll
+				}
+				if err := removeFn(linkPath); err != nil {
 					conflicts = append(conflicts, linkPath)
 					continue
 				}
@@ -203,7 +207,11 @@ func (l *Linker) linkComponentPaths(pluginPath, component string, paths []Compon
 				}
 			}
 			if force {
-				if err := os.Remove(linkPath); err != nil {
+				removeFn := os.Remove
+				if info, err := os.Lstat(linkPath); err == nil && info.IsDir() {
+					removeFn = os.RemoveAll
+				}
+				if err := removeFn(linkPath); err != nil {
 					conflicts = append(conflicts, linkPath)
 					continue
 				}
