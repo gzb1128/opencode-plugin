@@ -70,11 +70,27 @@ make install
 ```
 
 `make install` copies the binary to `/usr/local/bin/`. If that directory is not
-writable, build the binary and copy it to any directory on your `PATH`:
+writable, use `local-install` to install to `~/.local/bin` instead (no `sudo`
+needed):
 
 ```bash
 make build
-cp bin/opencode-plugin /path/on/your/PATH/
+make local-install
+```
+
+Make sure `~/.local/bin` is on your `PATH`. You can add it with:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Building from source avoids the macOS Gatekeeper quarantine issue described
+above, since the binary is built locally and not downloaded through a browser.
+
+To remove a locally-installed binary:
+
+```bash
+make uninstall-local
 ```
 
 You can also build from source directly:

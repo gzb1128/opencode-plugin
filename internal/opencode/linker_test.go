@@ -91,7 +91,7 @@ func TestLinker_CreateSymlinksFromManifest(t *testing.T) {
 		},
 	}
 
-	counts, err := linker.CreateSymlinksFromManifest(pluginPath, manifest)
+	counts, err := linker.CreateSymlinksFromManifest(pluginPath, manifest, false)
 	if err != nil {
 		t.Fatalf("CreateSymlinksFromManifest() error = %v", err)
 	}
@@ -121,7 +121,7 @@ func TestLinker_CommandsStringForm(t *testing.T) {
 		"commands": "./commands/review.md",
 	}
 
-	counts, err := linker.CreateSymlinksFromManifest(pluginPath, manifest)
+	counts, err := linker.CreateSymlinksFromManifest(pluginPath, manifest, false)
 	if err != nil {
 		t.Fatalf("CreateSymlinksFromManifest() error = %v", err)
 	}
@@ -147,7 +147,7 @@ func TestLinker_CommandsArrayForm(t *testing.T) {
 		},
 	}
 
-	counts, err := linker.CreateSymlinksFromManifest(pluginPath, manifest)
+	counts, err := linker.CreateSymlinksFromManifest(pluginPath, manifest, false)
 	if err != nil {
 		t.Fatalf("CreateSymlinksFromManifest() error = %v", err)
 	}
@@ -171,7 +171,7 @@ func TestLinker_CommandsInlineContent(t *testing.T) {
 		},
 	}
 
-	counts, err := linker.CreateSymlinksFromManifest(pluginPath, manifest)
+	counts, err := linker.CreateSymlinksFromManifest(pluginPath, manifest, false)
 	if err != nil {
 		t.Fatalf("CreateSymlinksFromManifest() error = %v", err)
 	}
@@ -307,6 +307,50 @@ func TestLinker_CreateSymlinks_Idempotent(t *testing.T) {
 	if counts1.Skills != counts2.Skills {
 		t.Errorf("idempotent check: first=%d, second=%d", counts1.Skills, counts2.Skills)
 	}
+}
+
+func TestLinker_CreateSymlinks_ForceOverwrite(t *testing.T) {
+	linker, agentsDir, pluginPath := setupLinkerTest(t)
+
+	// Create first plugin with skill "coding"
+	os.MkdirAll(filepath.Join(pluginPath, "skills", "coding"), 0755)
+	os.WriteFile(filepath.Join(pluginPath, "skills", "coding", "SKILL.md"), []byte("# coding v1"), 0644)
+
+	counts1, err := linker.CreateSymlinks(pluginPath)
+	if err != nil {
+		t.Fatalf("first CreateSymlinks() error = %v", err)
+	}
+	if counts1.Skills != 1 {
+		t.Fatalf("expected 1 skill linked, got %d", counts1.Skills)
+	}
+
+	// Simulate another plugin trying to overwrite the same skill name
+	otherPluginPath := filepath.Join(filepath.Dir(pluginPath), "other-plugin")
+	os.MkdirAll(otherPluginPath, 0755)
+	os.MkdirAll(filepath.Join(otherPluginPath, "skills", "coding"), 0755)
+	os.WriteFile(filepath.Join(otherPluginPath, "skills", "coding", "SKILL.md"), []byte("# coding v2"), 0644)
+
+	// Without force, should skip
+	linker2 := NewLinker(agentsDir)
+	counts2, err := linker2.CreateSymlinks(otherPluginPath)
+	if err != nil {
+		t.Fatalf("second CreateSymlinks() error = %v", err)
+	}
+	if counts2.Skills != 0 {
+		t.Fatalf("expected 0 skills linked (conflict), got %d", counts2.Skills)
+	}
+
+	// With force, should overwrite
+	counts3, err := linker2.CreateSymlinksFromManifest(otherPluginPath, nil, true)
+	if err != nil {
+		t.Fatalf("force CreateSymlinksFromManifest() error = %v", err)
+	}
+	if counts3.Skills != 1 {
+		t.Fatalf("expected 1 skill linked with force, got %d", counts3.Skills)
+	}
+
+	// Verify symlink now points to other plugin
+	assertSymlink(t, filepath.Join(agentsDir, "skills", "coding"), filepath.Join(otherPluginPath, "skills", "coding"))
 }
 
 func assertSymlink(t *testing.T, linkPath, expectedTarget string) {

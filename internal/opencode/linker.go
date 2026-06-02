@@ -32,10 +32,10 @@ type ComponentPath struct {
 }
 
 func (l *Linker) CreateSymlinks(pluginPath string) (*ComponentCounts, error) {
-	return l.CreateSymlinksFromManifest(pluginPath, nil)
+	return l.CreateSymlinksFromManifest(pluginPath, nil, false)
 }
 
-func (l *Linker) CreateSymlinksFromManifest(pluginPath string, manifestData map[string]interface{}) (*ComponentCounts, error) {
+func (l *Linker) CreateSymlinksFromManifest(pluginPath string, manifestData map[string]interface{}, force bool) (*ComponentCounts, error) {
 	counts := &ComponentCounts{}
 
 	skillPaths, skillFromManifest := l.extractComponentPaths(pluginPath, manifestData, "skills")
@@ -43,13 +43,13 @@ func (l *Linker) CreateSymlinksFromManifest(pluginPath string, manifestData map[
 	agentPaths, agentFromManifest := l.extractComponentPaths(pluginPath, manifestData, "agents")
 
 	if skillFromManifest {
-		n, _, err := l.linkComponentPaths(pluginPath, "skills", skillPaths)
+		n, _, err := l.linkComponentPaths(pluginPath, "skills", skillPaths, force)
 		if err != nil {
 			return nil, err
 		}
 		counts.Skills = n
 	} else {
-		n, _, err := l.linkComponentDir(pluginPath, "skills")
+		n, _, err := l.linkComponentDir(pluginPath, "skills", force)
 		if err != nil {
 			return nil, err
 		}
@@ -57,13 +57,13 @@ func (l *Linker) CreateSymlinksFromManifest(pluginPath string, manifestData map[
 	}
 
 	if cmdFromManifest {
-		n, _, err := l.linkComponentPaths(pluginPath, "commands", cmdPaths)
+		n, _, err := l.linkComponentPaths(pluginPath, "commands", cmdPaths, force)
 		if err != nil {
 			return nil, err
 		}
 		counts.Commands = n
 	} else {
-		n, _, err := l.linkComponentDir(pluginPath, "commands")
+		n, _, err := l.linkComponentDir(pluginPath, "commands", force)
 		if err != nil {
 			return nil, err
 		}
@@ -71,13 +71,13 @@ func (l *Linker) CreateSymlinksFromManifest(pluginPath string, manifestData map[
 	}
 
 	if agentFromManifest {
-		n, _, err := l.linkComponentPaths(pluginPath, "agents", agentPaths)
+		n, _, err := l.linkComponentPaths(pluginPath, "agents", agentPaths, force)
 		if err != nil {
 			return nil, err
 		}
 		counts.Agents = n
 	} else {
-		n, _, err := l.linkComponentDir(pluginPath, "agents")
+		n, _, err := l.linkComponentDir(pluginPath, "agents", force)
 		if err != nil {
 			return nil, err
 		}
@@ -87,7 +87,7 @@ func (l *Linker) CreateSymlinksFromManifest(pluginPath string, manifestData map[
 	return counts, nil
 }
 
-func (l *Linker) linkComponentDir(pluginPath, component string) (int, []string, error) {
+func (l *Linker) linkComponentDir(pluginPath, component string, force bool) (int, []string, error) {
 	targetDir := filepath.Join(l.agentsDir, component)
 
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
@@ -105,6 +105,7 @@ func (l *Linker) linkComponentDir(pluginPath, component string) (int, []string, 
 	}
 
 	var conflicts []string
+	var replaced []string
 	count := 0
 
 	for _, file := range files {
@@ -124,14 +125,29 @@ func (l *Linker) linkComponentDir(pluginPath, component string) (int, []string, 
 					continue
 				}
 			}
-			conflicts = append(conflicts, linkPath)
-			continue
+			if force {
+				if err := os.Remove(linkPath); err != nil {
+					conflicts = append(conflicts, linkPath)
+					continue
+				}
+				replaced = append(replaced, linkPath)
+			} else {
+				conflicts = append(conflicts, linkPath)
+				continue
+			}
 		}
 
 		if err := os.Symlink(srcPath, linkPath); err != nil {
 			return 0, conflicts, fmt.Errorf("failed to create symlink %s: %w", linkPath, err)
 		}
 		count++
+	}
+
+	if len(replaced) > 0 {
+		fmt.Printf("✓ Force-replaced existing %s:\n", component)
+		for _, r := range replaced {
+			fmt.Printf("  - %s\n", r)
+		}
 	}
 
 	if len(conflicts) > 0 {
@@ -144,7 +160,7 @@ func (l *Linker) linkComponentDir(pluginPath, component string) (int, []string, 
 	return count, conflicts, nil
 }
 
-func (l *Linker) linkComponentPaths(pluginPath, component string, paths []ComponentPath) (int, []string, error) {
+func (l *Linker) linkComponentPaths(pluginPath, component string, paths []ComponentPath, force bool) (int, []string, error) {
 	targetDir := filepath.Join(l.agentsDir, component)
 
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
@@ -152,6 +168,7 @@ func (l *Linker) linkComponentPaths(pluginPath, component string, paths []Compon
 	}
 
 	var conflicts []string
+	var replaced []string
 	count := 0
 
 	for _, cp := range paths {
@@ -185,14 +202,29 @@ func (l *Linker) linkComponentPaths(pluginPath, component string, paths []Compon
 					continue
 				}
 			}
-			conflicts = append(conflicts, linkPath)
-			continue
+			if force {
+				if err := os.Remove(linkPath); err != nil {
+					conflicts = append(conflicts, linkPath)
+					continue
+				}
+				replaced = append(replaced, linkPath)
+			} else {
+				conflicts = append(conflicts, linkPath)
+				continue
+			}
 		}
 
 		if err := os.Symlink(resolvedSrc, linkPath); err != nil {
 			return 0, conflicts, fmt.Errorf("failed to create symlink %s: %w", linkPath, err)
 		}
 		count++
+	}
+
+	if len(replaced) > 0 {
+		fmt.Printf("✓ Force-replaced existing %s:\n", component)
+		for _, r := range replaced {
+			fmt.Printf("  - %s\n", r)
+		}
 	}
 
 	if len(conflicts) > 0 {

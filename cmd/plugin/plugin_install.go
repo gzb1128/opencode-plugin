@@ -25,15 +25,14 @@ Examples:
 	Run: func(cmd *cobra.Command, args []string) {
 		pluginSpec := args[0]
 		version, _ := cmd.Flags().GetString("version")
+		force, _ := cmd.Flags().GetBool("force")
 
-		// Parse plugin spec (name@market)
 		var pluginName, marketName string
 		if idx := strings.Index(pluginSpec, "@"); idx > 0 {
 			pluginName = pluginSpec[:idx]
 			marketName = pluginSpec[idx+1:]
 		} else {
 			pluginName = pluginSpec
-			// Market name will be auto-detected
 		}
 
 		configMgr, err := config.NewManager()
@@ -48,6 +47,7 @@ Examples:
 			Version:    version,
 			MarketName: marketName,
 			Scope:      "user",
+			Force:      force,
 		}
 
 		if err := installer.Install(pluginName, opts); err != nil {
@@ -212,6 +212,7 @@ func printPluginsJSON(installed map[string][]config.InstallRecord) {
 
 func init() {
 	installCmd.Flags().StringP("version", "v", "", "Plugin version to install")
+	installCmd.Flags().BoolP("force", "f", false, "Force overwrite existing skills, commands, and agents")
 	listCmd.Flags().BoolVar(&listJSONFlag, "json", false, "Output as JSON")
 
 	Cmd.AddCommand(installCmd)

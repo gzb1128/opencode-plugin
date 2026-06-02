@@ -1,7 +1,8 @@
-.PHONY: build test clean install test-e2e
+.PHONY: build test clean install local-install uninstall-local test-e2e
 
 BINARY_NAME=opencode-plugin
 BIN_DIR=bin
+LOCAL_BIN_DIR=$(HOME)/.local/bin
 
 build:
 	@mkdir -p $(BIN_DIR)
@@ -22,6 +23,16 @@ clean:
 
 install: build
 	cp $(BIN_DIR)/$(BINARY_NAME) /usr/local/bin/
+
+local-install: build
+	@mkdir -p $(LOCAL_BIN_DIR)
+	cp $(BIN_DIR)/$(BINARY_NAME) $(LOCAL_BIN_DIR)/
+	@echo "✓ Installed to $(LOCAL_BIN_DIR)/$(BINARY_NAME)"
+	@echo "  Make sure $(LOCAL_BIN_DIR) is in your PATH"
+
+uninstall-local:
+	rm -f $(LOCAL_BIN_DIR)/$(BINARY_NAME)
+	@echo "✓ Removed $(LOCAL_BIN_DIR)/$(BINARY_NAME)"
 
 run: build
 	./$(BIN_DIR)/$(BINARY_NAME)
