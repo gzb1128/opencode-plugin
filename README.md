@@ -1,5 +1,10 @@
 # opencode-plugin
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![GitHub Release](https://img.shields.io/github/v/release/gzb1128/opencode-plugin?include_prereleases)](https://github.com/gzb1128/opencode-plugin/releases)
+[![Go Report Card](https://goreportcard.com/badge/github.com/gzb1128/opencode-plugin)](https://goreportcard.com/report/github.com/gzb1128/opencode-plugin)
+
 `opencode-plugin` is a CLI for installing marketplace plugins into an
 OpenCode-style agent setup.
 
