@@ -4,8 +4,6 @@
 [![Go Version](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![GitHub Release](https://img.shields.io/github/v/release/gzb1128/opencode-plugin?include_prereleases)](https://github.com/gzb1128/opencode-plugin/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/gzb1128/opencode-plugin)](https://goreportcard.com/report/github.com/gzb1128/opencode-plugin)
-[![GitHub Stars](https://img.shields.io/github/stars/gzb1128/opencode-plugin?style=social)](https://github.com/gzb1128/opencode-plugin/stargazers)
-[![GitHub Issues](https://img.shields.io/github/issues/gzb1128/opencode-plugin)](https://github.com/gzb1128/opencode-plugin/issues)
 
 `opencode-plugin` is a CLI for installing marketplace plugins into an
 OpenCode-style agent setup.
