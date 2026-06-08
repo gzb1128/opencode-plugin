@@ -531,6 +531,97 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 	return nil
 }
 
+func (i *Installer) Disable(pluginName, marketName string) error {
+	key := fmt.Sprintf("%s@%s", pluginName, marketName)
+	record, err := i.configMgr.GetInstallRecord(key)
+	if err != nil {
+		return fmt.Errorf("plugin %s not found", key)
+	}
+
+	installPath := record.InstallPath
+	cacheDir := i.configMgr.GetPaths().CacheDir
+	if installPath != "" && !isWithinDir(installPath, cacheDir) {
+		return fmt.Errorf("refusing to disable path %q outside cache directory %q", installPath, cacheDir)
+	}
+
+	var symlinkCount int
+	if installPath != "" {
+		count, err := i.linker.RemoveSymlinks(installPath)
+		if err != nil {
+			fmt.Printf("Warning: error removing symlinks: %v\n", err)
+		}
+		symlinkCount = count
+	}
+
+	if err := i.mcpManager.DisableMCPConfig(pluginName); err != nil {
+		fmt.Printf("Warning: failed to disable MCP servers: %v\n", err)
+	}
+
+	if !record.Disabled {
+		record.Disabled = true
+		record.DisabledAt = time.Now()
+		if err := i.configMgr.UpdateInstallRecord(key, record); err != nil {
+			return fmt.Errorf("failed to update installation record: %w", err)
+		}
+	}
+
+	fmt.Printf("Disabled plugin: %s (%d symlinks removed)\n", key, symlinkCount)
+	return nil
+}
+
+func (i *Installer) Enable(pluginName, marketName string, force bool) error {
+	key := fmt.Sprintf("%s@%s", pluginName, marketName)
+	record, err := i.configMgr.GetInstallRecord(key)
+	if err != nil {
+		return fmt.Errorf("plugin %s not found", key)
+	}
+
+	installPath := record.InstallPath
+	cacheDir := i.configMgr.GetPaths().CacheDir
+	if !isWithinDir(installPath, cacheDir) {
+		return fmt.Errorf("refusing to enable path %q outside cache directory %q", installPath, cacheDir)
+	}
+
+	if _, err := os.Stat(installPath); os.IsNotExist(err) {
+		return fmt.Errorf("plugin cache not found at %s, run 'opencode-plugin plugin update %s' or reinstall", installPath, key)
+	}
+
+	manifestPath := filepath.Join(installPath, ".claude-plugin", "plugin.json")
+	var manifest map[string]interface{}
+	if _, err := os.Stat(manifestPath); err == nil {
+		manifest, _ = opencode.ReadManifest(manifestPath)
+	}
+
+	counts, err := i.linker.CreateSymlinksFromManifest(installPath, manifest, force)
+	if err != nil {
+		return fmt.Errorf("failed to create symlinks: %w", err)
+	}
+
+	if err := i.mcpManager.EnableMCPConfig(pluginName); err != nil {
+		fmt.Printf("Warning: failed to enable MCP servers: %v\n", err)
+	}
+
+	if record.Disabled {
+		record.Disabled = false
+		record.DisabledAt = time.Time{}
+		if err := i.configMgr.UpdateInstallRecord(key, record); err != nil {
+			return fmt.Errorf("failed to update installation record: %w", err)
+		}
+	}
+
+	fmt.Printf("Enabled plugin: %s\n", key)
+	if counts.Skills > 0 {
+		fmt.Printf("  Skills: %d\n", counts.Skills)
+	}
+	if counts.Commands > 0 {
+		fmt.Printf("  Commands: %d\n", counts.Commands)
+	}
+	if counts.Agents > 0 {
+		fmt.Printf("  Agents: %d\n", counts.Agents)
+	}
+	return nil
+}
+
 func (i *Installer) CleanupOldVersions(currentInstallPath string) error {
 	cacheDir := i.configMgr.GetPaths().CacheDir
 	if !isWithinDir(currentInstallPath, cacheDir) {
