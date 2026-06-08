@@ -53,15 +53,15 @@ Examples:
 					continue
 				}
 
-				parts := strings.Split(key, "@")
-				if len(parts) != 2 {
+				idx := strings.LastIndex(key, "@")
+				if idx <= 0 {
 					continue
 				}
-				pluginName := parts[0]
-				marketName := parts[1]
+				pluginName := key[:idx]
+				marketName := key[idx+1:]
 
 				fmt.Printf("Updating %s...\n", key)
-				if err := updatePlugin(installer, configMgr, pluginName, marketName, force); err != nil {
+				if err := updatePlugin(installer, configMgr, pluginName, marketName, force, &records[0]); err != nil {
 					fmt.Fprintf(os.Stderr, "  Error: %v\n\n", err)
 					failed++
 				} else {
@@ -87,15 +87,23 @@ Examples:
 	},
 }
 
-func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, pluginName, marketName string, force bool) error {
+func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, pluginName, marketName string, force bool, preloadedRecord ...*config.InstallRecord) error {
 	key := fmt.Sprintf("%s@%s", pluginName, marketName)
 
-	wasDisabled := false
-	if record, err := configMgr.GetInstallRecord(key); err == nil {
-		wasDisabled = record.Disabled
+	var existingRecord *config.InstallRecord
+	if len(preloadedRecord) > 0 && preloadedRecord[0] != nil {
+		existingRecord = preloadedRecord[0]
+	} else if record, err := configMgr.GetInstallRecord(key); err == nil {
+		existingRecord = record
 	}
 
-	if err := installer.Remove(pluginName, marketName); err != nil {
+	wasDisabled := existingRecord != nil && existingRecord.Disabled
+
+	if wasDisabled {
+		if err := installer.Disable(pluginName, marketName); err != nil {
+			return fmt.Errorf("failed to prepare disabled plugin for update: %w", err)
+		}
+	} else if err := installer.Remove(pluginName, marketName); err != nil {
 		return fmt.Errorf("failed to remove old version: %w", err)
 	}
 
@@ -106,14 +114,12 @@ func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, plugin
 		Force:      force,
 	}
 
-	if err := installer.Install(pluginName, opts); err != nil {
-		return fmt.Errorf("failed to install new version: %w", err)
+	if wasDisabled {
+		opts.Disabled = true
 	}
 
-	if wasDisabled {
-		if err := installer.Disable(pluginName, marketName); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to re-disable plugin after update: %v\n", err)
-		}
+	if err := installer.Install(pluginName, opts); err != nil {
+		return fmt.Errorf("failed to install new version: %w", err)
 	}
 
 	record, err := configMgr.GetInstallRecord(key)

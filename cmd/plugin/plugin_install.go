@@ -28,7 +28,7 @@ Examples:
 		force, _ := cmd.Flags().GetBool("force")
 
 		var pluginName, marketName string
-		if idx := strings.Index(pluginSpec, "@"); idx > 0 {
+		if idx := strings.LastIndex(pluginSpec, "@"); idx > 0 {
 			pluginName = pluginSpec[:idx]
 			marketName = pluginSpec[idx+1:]
 		} else {
@@ -49,12 +49,7 @@ Examples:
 			os.Exit(1)
 		}
 
-		var disabledKeys []string
-		for key, records := range installed {
-			if strings.HasPrefix(key, pluginName+"@") && len(records) > 0 && records[0].Disabled {
-				disabledKeys = append(disabledKeys, key)
-			}
-		}
+		disabledKeys := findDisabledInstallMatches(installed, pluginName, marketName, version)
 
 		if len(disabledKeys) > 1 {
 			fmt.Fprintf(os.Stderr, "Error: Multiple disabled installations of %s found:\n", pluginName)
@@ -68,9 +63,8 @@ Examples:
 
 		if len(disabledKeys) == 1 {
 			existingKey := disabledKeys[0]
-			parts := strings.SplitN(existingKey, "@", 2)
-			if len(parts) == 2 {
-				marketName = parts[1]
+			if idx := strings.LastIndex(existingKey, "@"); idx > 0 {
+				marketName = existingKey[idx+1:]
 			}
 			fmt.Printf("Plugin %s is installed but disabled. Enabling...\n", existingKey)
 			if err := installer.Enable(pluginName, marketName, force); err != nil {
@@ -92,6 +86,28 @@ Examples:
 			os.Exit(1)
 		}
 	},
+}
+
+func findDisabledInstallMatches(installed map[string][]config.InstallRecord, pluginName, marketName, version string) []string {
+	var matches []string
+	for key, records := range installed {
+		if len(records) == 0 || !records[0].Disabled {
+			continue
+		}
+		idx := strings.LastIndex(key, "@")
+		if idx <= 0 || key[:idx] != pluginName {
+			continue
+		}
+		if marketName != "" && key[idx+1:] != marketName {
+			continue
+		}
+		if version != "" && records[0].Version != version {
+			continue
+		}
+		matches = append(matches, key)
+	}
+	sort.Strings(matches)
+	return matches
 }
 
 var removeCmd = &cobra.Command{

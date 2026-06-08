@@ -46,6 +46,7 @@ type InstallOptions struct {
 	Version    string
 	Scope      string
 	Force      bool
+	Disabled   bool
 }
 
 func (i *Installer) Install(pluginName string, opts InstallOptions) error {
@@ -135,6 +136,28 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 		manifest, _ = opencode.ReadManifest(mat.ManifestPath)
 	}
 
+	key := fmt.Sprintf("%s@%s", resolved.Plugin.Name, opts.MarketName)
+
+	if opts.Disabled {
+		record := &config.InstallRecord{
+			Scope:       opts.Scope,
+			InstallPath: mat.Path,
+			Version:     mat.Version,
+			InstalledAt: time.Now(),
+			Disabled:    true,
+			DisabledAt:  time.Now(),
+		}
+
+		if err := i.configMgr.AddInstallRecord(key, record); err != nil {
+			return fmt.Errorf("failed to record installation: %w", err)
+		}
+
+		fmt.Printf("✓ Updated disabled plugin: %s@%s\n", resolved.Plugin.Name, mat.Version)
+		fmt.Printf("  From marketplace: %s\n", opts.MarketName)
+		fmt.Printf("  Cache: %s\n", mat.Path)
+		return nil
+	}
+
 	counts, err := i.linker.CreateSymlinksFromManifest(mat.Path, manifest, opts.Force)
 	if err != nil {
 		fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", err)
@@ -145,7 +168,6 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 		fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
 	}
 
-	key := fmt.Sprintf("%s@%s", resolved.Plugin.Name, opts.MarketName)
 	record := &config.InstallRecord{
 		Scope:       opts.Scope,
 		InstallPath: mat.Path,
@@ -544,27 +566,26 @@ func (i *Installer) Disable(pluginName, marketName string) error {
 		return fmt.Errorf("refusing to disable path %q outside cache directory %q", installPath, cacheDir)
 	}
 
-	var symlinkCount int
 	if installPath != "" {
-		count, err := i.linker.RemoveSymlinks(installPath)
-		if err != nil {
-			fmt.Printf("Warning: error removing symlinks: %v\n", err)
+		if _, err := i.linker.RemoveSymlinks(installPath); err != nil {
+			return fmt.Errorf("failed to remove symlinks: %w", err)
 		}
-		symlinkCount = count
 	}
 
 	if err := i.mcpManager.DisableMCPConfig(pluginName); err != nil {
-		fmt.Printf("Warning: failed to disable MCP servers: %v\n", err)
+		return fmt.Errorf("failed to disable MCP servers: %w", err)
 	}
 
 	if err := i.configMgr.MutateInstallRecord(key, func(r *config.InstallRecord) {
-		r.Disabled = true
-		r.DisabledAt = time.Now()
+		if !r.Disabled {
+			r.Disabled = true
+			r.DisabledAt = time.Now()
+		}
 	}); err != nil {
 		return fmt.Errorf("failed to update installation record: %w", err)
 	}
 
-	fmt.Printf("Disabled plugin: %s (%d symlinks removed)\n", key, symlinkCount)
+	fmt.Printf("Disabled plugin: %s\n", key)
 	return nil
 }
 
@@ -600,8 +621,8 @@ func (i *Installer) Enable(pluginName, marketName string, force bool) error {
 		return fmt.Errorf("failed to create symlinks: %w", err)
 	}
 
-	if err := i.mcpManager.EnableMCPConfig(pluginName); err != nil {
-		fmt.Printf("Warning: failed to enable MCP servers: %v\n", err)
+	if err := i.reinstallMCPIfNeeded(installPath, pluginName, marketName); err != nil {
+		return fmt.Errorf("failed to enable MCP servers: %w", err)
 	}
 
 	if err := i.configMgr.MutateInstallRecord(key, func(r *config.InstallRecord) {
@@ -622,6 +643,23 @@ func (i *Installer) Enable(pluginName, marketName string, force bool) error {
 		fmt.Printf("  Agents: %d\n", counts.Agents)
 	}
 	return nil
+}
+
+func (i *Installer) reinstallMCPIfNeeded(installPath, pluginName, marketName string) error {
+	if err := i.mcpManager.EnableMCPConfig(pluginName); err != nil {
+		return err
+	}
+
+	servers, err := i.mcpManager.GetMCPServers(installPath)
+	if err != nil {
+		fmt.Printf("Warning: failed to read MCP config from cache: %v\n", err)
+		return nil
+	}
+	if len(servers) == 0 {
+		return nil
+	}
+
+	return i.mcpManager.InstallMissingMCPConfig(installPath, pluginName, marketName, servers)
 }
 
 func (i *Installer) CleanupOldVersions(currentInstallPath string) error {

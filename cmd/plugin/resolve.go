@@ -16,11 +16,10 @@ const (
 	actionEnable  resolveAction = "enable"
 	actionRemove  resolveAction = "remove"
 	actionUpdate  resolveAction = "update"
-	actionInstall resolveAction = "install"
 )
 
 func resolveMarketName(installer *plugin.Installer, pluginSpec string, action resolveAction) (pluginName, marketName string, resolved bool) {
-	if idx := strings.Index(pluginSpec, "@"); idx > 0 {
+	if idx := strings.LastIndex(pluginSpec, "@"); idx > 0 {
 		return pluginSpec[:idx], pluginSpec[idx+1:], true
 	}
 

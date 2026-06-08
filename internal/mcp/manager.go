@@ -184,6 +184,86 @@ func (m *Manager) InstallMCPConfig(pluginPath, pluginName, marketName string) er
 	return m.writeOpenCodeConfig(opencodeConfig)
 }
 
+func (m *Manager) InstallMissingMCPConfig(pluginPath, pluginName, marketName string, servers map[string]MCPServer) error {
+	if len(servers) == 0 {
+		return nil
+	}
+
+	pluginInfo, _ := m.ReadPluginJSON(pluginPath)
+	pluginVersion := ""
+	if pluginInfo != nil {
+		pluginVersion = pluginInfo.Version
+	}
+
+	var pluginDataDir string
+	if m.pluginDataDir != "" && pluginName != "" && marketName != "" {
+		pluginDataDir = filepath.Join(m.pluginDataDir, pathutil.SanitizeAlias(marketName), pathutil.SanitizeAlias(pluginName))
+		if usesPluginData(servers) {
+			if err := os.MkdirAll(pluginDataDir, 0755); err != nil {
+				return fmt.Errorf("failed to create plugin data directory: %w", err)
+			}
+		}
+	}
+
+	configPath := m.opencodeConfigPath()
+	fullConfig := make(map[string]json.RawMessage)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+	} else if err := json.Unmarshal(data, &fullConfig); err != nil {
+		return fmt.Errorf("failed to parse opencode.json: %w", err)
+	}
+
+	mcpConfig := make(map[string]json.RawMessage)
+	if rawMCP, ok := fullConfig["mcp"]; ok {
+		if err := json.Unmarshal(rawMCP, &mcpConfig); err != nil {
+			return fmt.Errorf("failed to parse mcp config: %w", err)
+		}
+		if mcpConfig == nil {
+			mcpConfig = make(map[string]json.RawMessage)
+		}
+	}
+
+	changed := false
+	for serverName, server := range servers {
+		fullName := fmt.Sprintf("%s.%s", pluginName, serverName)
+		if _, ok := mcpConfig[fullName]; ok {
+			continue
+		}
+
+		server = m.substituteVariables(server, pluginPath, pluginName, pluginVersion, pluginDataDir)
+		data, err := json.Marshal(m.toOpenCodeServer(server))
+		if err != nil {
+			return fmt.Errorf("failed to marshal mcp server %s: %w", fullName, err)
+		}
+		mcpConfig[fullName] = data
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+
+	mcpData, err := json.Marshal(mcpConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal mcp config: %w", err)
+	}
+	fullConfig["mcp"] = mcpData
+
+	output, err := json.MarshalIndent(fullConfig, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal opencode.json: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	return os.WriteFile(configPath, append(output, '\n'), 0644)
+}
+
 func usesPluginData(servers map[string]MCPServer) bool {
 	for _, server := range servers {
 		if strings.Contains(server.Command, "${CLAUDE_PLUGIN_DATA}") || strings.Contains(server.URL, "${CLAUDE_PLUGIN_DATA}") {
@@ -227,37 +307,16 @@ func (m *Manager) UninstallMCPConfig(pluginName string) error {
 }
 
 func (m *Manager) DisableMCPConfig(pluginName string) error {
-	opencodeConfig, err := m.readOpenCodeConfig()
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	if opencodeConfig.MCP == nil {
-		return nil
-	}
-
-	prefix := fmt.Sprintf("%s.", pluginName)
-	changed := false
-	for name, server := range opencodeConfig.MCP {
-		if strings.HasPrefix(name, prefix) && server.Enabled {
-			server.Enabled = false
-			opencodeConfig.MCP[name] = server
-			changed = true
-		}
-	}
-
-	if !changed {
-		return nil
-	}
-
-	return m.writeOpenCodeConfig(opencodeConfig)
+	return m.setMCPEnabled(pluginName, false)
 }
 
 func (m *Manager) EnableMCPConfig(pluginName string) error {
-	opencodeConfig, err := m.readOpenCodeConfig()
+	return m.setMCPEnabled(pluginName, true)
+}
+
+func (m *Manager) setMCPEnabled(pluginName string, enabled bool) error {
+	configPath := m.opencodeConfigPath()
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -265,25 +324,72 @@ func (m *Manager) EnableMCPConfig(pluginName string) error {
 		return err
 	}
 
-	if opencodeConfig.MCP == nil {
+	var fullConfig map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fullConfig); err != nil {
+		return fmt.Errorf("failed to parse opencode.json: %w", err)
+	}
+
+	rawMCP, ok := fullConfig["mcp"]
+	if !ok {
 		return nil
+	}
+
+	var mcp map[string]json.RawMessage
+	if err := json.Unmarshal(rawMCP, &mcp); err != nil {
+		return fmt.Errorf("failed to parse mcp config: %w", err)
 	}
 
 	prefix := fmt.Sprintf("%s.", pluginName)
 	changed := false
-	for name, server := range opencodeConfig.MCP {
-		if strings.HasPrefix(name, prefix) && !server.Enabled {
-			server.Enabled = true
-			opencodeConfig.MCP[name] = server
-			changed = true
+	for name, rawServer := range mcp {
+		if !strings.HasPrefix(name, prefix) {
+			continue
 		}
+
+		var server map[string]json.RawMessage
+		if err := json.Unmarshal(rawServer, &server); err != nil {
+			return fmt.Errorf("failed to parse mcp server %s: %w", name, err)
+		}
+		if server == nil {
+			return fmt.Errorf("failed to parse mcp server %s: server must be an object", name)
+		}
+
+		if rawEnabled, ok := server["enabled"]; ok {
+			var current bool
+			if err := json.Unmarshal(rawEnabled, &current); err == nil && current == enabled {
+				continue
+			}
+		}
+
+		server["enabled"] = json.RawMessage(fmt.Sprintf("%t", enabled))
+		updated, err := json.Marshal(server)
+		if err != nil {
+			return fmt.Errorf("failed to marshal mcp server %s: %w", name, err)
+		}
+		mcp[name] = updated
+		changed = true
 	}
 
 	if !changed {
 		return nil
 	}
 
-	return m.writeOpenCodeConfig(opencodeConfig)
+	mcpData, err := json.Marshal(mcp)
+	if err != nil {
+		return fmt.Errorf("failed to marshal mcp config: %w", err)
+	}
+	fullConfig["mcp"] = mcpData
+
+	output, err := json.MarshalIndent(fullConfig, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal opencode.json: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	return os.WriteFile(configPath, append(output, '\n'), 0644)
 }
 
 func (m *Manager) ListMCPServers() (map[string]MCPServer, error) {

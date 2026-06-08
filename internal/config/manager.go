@@ -129,7 +129,7 @@ func (m *Manager) AddInstallRecord(key string, record *InstallRecord) error {
 		return err
 	}
 
-	installed.Plugins[key] = append(installed.Plugins[key], *record)
+	installed.Plugins[key] = []InstallRecord{*record}
 
 	return m.SaveInstalledPlugins(installed)
 }
@@ -145,23 +145,6 @@ func (m *Manager) RemoveInstallRecord(key string) error {
 	return m.SaveInstalledPlugins(installed)
 }
 
-func (m *Manager) UpdateInstallRecord(key string, record *InstallRecord) error {
-	installed, err := m.LoadInstalledPlugins()
-	if err != nil {
-		return err
-	}
-
-	records, ok := installed.Plugins[key]
-	if !ok || len(records) == 0 {
-		return fmt.Errorf("plugin %s not found", key)
-	}
-
-	records[0] = *record
-	installed.Plugins[key] = records
-
-	return m.SaveInstalledPlugins(installed)
-}
-
 func (m *Manager) MutateInstallRecord(key string, fn func(*InstallRecord)) error {
 	installed, err := m.LoadInstalledPlugins()
 	if err != nil {
@@ -173,7 +156,13 @@ func (m *Manager) MutateInstallRecord(key string, fn func(*InstallRecord)) error
 		return fmt.Errorf("plugin %s not found", key)
 	}
 
+	before := records[0]
 	fn(&records[0])
+
+	if records[0] == before {
+		return nil
+	}
+
 	installed.Plugins[key] = records
 
 	return m.SaveInstalledPlugins(installed)
