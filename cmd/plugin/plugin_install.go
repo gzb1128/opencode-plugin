@@ -43,6 +43,33 @@ Examples:
 
 		installer := plugin.NewInstaller(configMgr)
 
+		installed, err := installer.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to list installed plugins: %v\n", err)
+			os.Exit(1)
+		}
+
+		existingKey := ""
+		for key, records := range installed {
+			if strings.HasPrefix(key, pluginName+"@") && len(records) > 0 && records[0].Disabled {
+				existingKey = key
+				break
+			}
+		}
+
+		if existingKey != "" {
+			parts := strings.SplitN(existingKey, "@", 2)
+			if len(parts) == 2 {
+				marketName = parts[1]
+			}
+			fmt.Printf("Plugin %s is installed but disabled. Enabling...\n", existingKey)
+			if err := installer.Enable(pluginName, marketName, force); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
 		opts := plugin.InstallOptions{
 			Version:    version,
 			MarketName: marketName,
