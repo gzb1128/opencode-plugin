@@ -129,3 +129,48 @@ func TestManager_InstalledPlugins(t *testing.T) {
 		t.Error("GetInstallRecord() expected error after removal")
 	}
 }
+
+func TestInstallRecord_DisabledBackwardCompatibility(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	paths := &Paths{
+		BaseDir:       tmpDir,
+		MarketsDir:    filepath.Join(tmpDir, "markets"),
+		CacheDir:      filepath.Join(tmpDir, "cache"),
+		KnownMarkets:  filepath.Join(tmpDir, "known_marketplaces.json"),
+		InstalledFile: filepath.Join(tmpDir, "installed_plugins.json"),
+	}
+
+	manager := &Manager{paths: paths}
+
+	oldFormat := `{
+		"version": 2,
+		"plugins": {
+			"old-plugin@test-market": [
+				{
+					"scope": "user",
+					"installPath": "/tmp/cache/old-plugin/1.0.0",
+					"version": "1.0.0",
+					"installedAt": "2026-01-01T00:00:00Z"
+				}
+			]
+		}
+	}`
+
+	if err := os.WriteFile(paths.InstalledFile, []byte(oldFormat), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	record, err := manager.GetInstallRecord("old-plugin@test-market")
+	if err != nil {
+		t.Fatalf("GetInstallRecord() error = %v", err)
+	}
+
+	if record.Disabled {
+		t.Error("Expected Disabled to default to false for old-format records")
+	}
+
+	if !record.DisabledAt.IsZero() {
+		t.Error("Expected DisabledAt to be zero for old-format records")
+	}
+}
