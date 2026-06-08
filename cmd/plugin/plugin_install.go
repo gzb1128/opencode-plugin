@@ -156,6 +156,7 @@ type pluginJSONEntry struct {
 	Version     string `json:"version"`
 	InstallPath string `json:"installPath"`
 	InstalledAt string `json:"installedAt"`
+	Disabled    bool   `json:"disabled"`
 }
 
 var listJSONFlag bool
@@ -196,7 +197,11 @@ var listCmd = &cobra.Command{
 				continue
 			}
 			record := records[0]
-			fmt.Printf("  %s\n", key)
+			status := "enabled"
+			if record.Disabled {
+				status = "disabled"
+			}
+			fmt.Printf("  %s [%s]\n", key, status)
 			fmt.Printf("    Version: %s\n", record.Version)
 			fmt.Printf("    Scope: %s\n", record.Scope)
 			fmt.Printf("    Path: %s\n", record.InstallPath)
@@ -226,6 +231,7 @@ func printPluginsJSON(installed map[string][]config.InstallRecord) {
 			Version:     record.Version,
 			InstallPath: record.InstallPath,
 			InstalledAt: record.InstalledAt.Format("2006-01-02T15:04:05Z07:00"),
+			Disabled:    record.Disabled,
 		}
 		entries = append(entries, entry)
 	}
