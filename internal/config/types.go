@@ -19,7 +19,7 @@ type InstallRecord struct {
 	InstalledAt  time.Time `json:"installedAt"`
 	LastUpdated  time.Time `json:"lastUpdated"`
 	GitCommitSHA string    `json:"gitCommitSha,omitempty"`
-	Disabled     bool      `json:"disabled,omitempty"`
+	Disabled     bool      `json:"disabled"`
 	DisabledAt   time.Time `json:"disabledAt,omitempty"`
 }
 

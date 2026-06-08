@@ -236,3 +236,61 @@ func TestInstallRecord_DisabledBackwardCompatibility(t *testing.T) {
 		t.Error("Expected DisabledAt to be zero for old-format records")
 	}
 }
+
+func TestManager_MutateInstallRecord(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	paths := &Paths{
+		BaseDir:       tmpDir,
+		MarketsDir:    filepath.Join(tmpDir, "markets"),
+		CacheDir:      filepath.Join(tmpDir, "cache"),
+		KnownMarkets:  filepath.Join(tmpDir, "known_marketplaces.json"),
+		InstalledFile: filepath.Join(tmpDir, "installed_plugins.json"),
+	}
+
+	manager := &Manager{paths: paths}
+
+	record := &InstallRecord{
+		Scope:       "user",
+		InstallPath: "/tmp/cache/test-plugin/1.0.0",
+		Version:     "1.0.0",
+		InstalledAt: time.Now(),
+	}
+	manager.AddInstallRecord("test-plugin@test-market", record)
+
+	if err := manager.MutateInstallRecord("test-plugin@test-market", func(r *InstallRecord) {
+		r.Disabled = true
+		r.DisabledAt = time.Now()
+	}); err != nil {
+		t.Fatalf("MutateInstallRecord() error = %v", err)
+	}
+
+	loaded, err := manager.GetInstallRecord("test-plugin@test-market")
+	if err != nil {
+		t.Fatalf("GetInstallRecord() error = %v", err)
+	}
+	if !loaded.Disabled {
+		t.Error("Expected Disabled to be true after MutateInstallRecord")
+	}
+}
+
+func TestManager_MutateInstallRecord_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	paths := &Paths{
+		BaseDir:       tmpDir,
+		MarketsDir:    filepath.Join(tmpDir, "markets"),
+		CacheDir:      filepath.Join(tmpDir, "cache"),
+		KnownMarkets:  filepath.Join(tmpDir, "known_marketplaces.json"),
+		InstalledFile: filepath.Join(tmpDir, "installed_plugins.json"),
+	}
+
+	manager := &Manager{paths: paths}
+
+	err := manager.MutateInstallRecord("nonexistent@test-market", func(r *InstallRecord) {
+		r.Disabled = true
+	})
+	if err == nil {
+		t.Error("Expected error for nonexistent record")
+	}
+}

@@ -27,9 +27,9 @@ func TestGetMarketURLPrefersRepoForGithub(t *testing.T) {
 
 func TestGetMarketURLSourceAware(t *testing.T) {
 	tests := []struct {
-		name string
+		name   string
 		market map[string]interface{}
-		want string
+		want   string
 	}{
 		{
 			name: "github returns repo",

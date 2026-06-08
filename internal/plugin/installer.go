@@ -557,12 +557,11 @@ func (i *Installer) Disable(pluginName, marketName string) error {
 		fmt.Printf("Warning: failed to disable MCP servers: %v\n", err)
 	}
 
-	if !record.Disabled {
-		record.Disabled = true
-		record.DisabledAt = time.Now()
-		if err := i.configMgr.UpdateInstallRecord(key, record); err != nil {
-			return fmt.Errorf("failed to update installation record: %w", err)
-		}
+	if err := i.configMgr.MutateInstallRecord(key, func(r *config.InstallRecord) {
+		r.Disabled = true
+		r.DisabledAt = time.Now()
+	}); err != nil {
+		return fmt.Errorf("failed to update installation record: %w", err)
 	}
 
 	fmt.Printf("Disabled plugin: %s (%d symlinks removed)\n", key, symlinkCount)
@@ -578,8 +577,12 @@ func (i *Installer) Enable(pluginName, marketName string, force bool) error {
 
 	installPath := record.InstallPath
 	cacheDir := i.configMgr.GetPaths().CacheDir
-	if !isWithinDir(installPath, cacheDir) {
+	if installPath != "" && !isWithinDir(installPath, cacheDir) {
 		return fmt.Errorf("refusing to enable path %q outside cache directory %q", installPath, cacheDir)
+	}
+
+	if installPath == "" {
+		return fmt.Errorf("plugin %s has no install path recorded", key)
 	}
 
 	if _, err := os.Stat(installPath); os.IsNotExist(err) {
@@ -601,12 +604,11 @@ func (i *Installer) Enable(pluginName, marketName string, force bool) error {
 		fmt.Printf("Warning: failed to enable MCP servers: %v\n", err)
 	}
 
-	if record.Disabled {
-		record.Disabled = false
-		record.DisabledAt = time.Time{}
-		if err := i.configMgr.UpdateInstallRecord(key, record); err != nil {
-			return fmt.Errorf("failed to update installation record: %w", err)
-		}
+	if err := i.configMgr.MutateInstallRecord(key, func(r *config.InstallRecord) {
+		r.Disabled = false
+		r.DisabledAt = time.Time{}
+	}); err != nil {
+		return fmt.Errorf("failed to update installation record: %w", err)
 	}
 
 	fmt.Printf("Enabled plugin: %s\n", key)
