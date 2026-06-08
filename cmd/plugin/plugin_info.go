@@ -133,6 +133,4 @@ Examples:
 	},
 }
 
-func init() {
-	Cmd.AddCommand(infoCmd)
-}
+

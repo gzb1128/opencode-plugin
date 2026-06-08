@@ -153,7 +153,4 @@ Examples:
 	},
 }
 
-func init() {
-	searchCmd.Flags().StringP("market", "m", "", "Search in specific marketplace")
-	Cmd.AddCommand(searchCmd)
-}
+

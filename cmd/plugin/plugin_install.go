@@ -237,12 +237,4 @@ func printPluginsJSON(installed map[string][]config.InstallRecord) {
 	enc.Encode(entries)
 }
 
-func init() {
-	installCmd.Flags().StringP("version", "v", "", "Plugin version to install")
-	installCmd.Flags().BoolP("force", "f", false, "Force overwrite existing skills, commands, and agents")
-	listCmd.Flags().BoolVar(&listJSONFlag, "json", false, "Output as JSON")
 
-	Cmd.AddCommand(installCmd)
-	Cmd.AddCommand(removeCmd)
-	Cmd.AddCommand(listCmd)
-}

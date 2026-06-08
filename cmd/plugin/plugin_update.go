@@ -150,7 +150,4 @@ func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, plugin
 	return nil
 }
 
-func init() {
-	updateCmd.Flags().BoolP("force", "f", false, "Force overwrite existing skills, commands, and agents")
-	Cmd.AddCommand(updateCmd)
-}
+
