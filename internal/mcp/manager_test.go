@@ -617,6 +617,178 @@ func TestUninstallMCPConfig(t *testing.T) {
 	})
 }
 
+func TestDisableMCPConfig(t *testing.T) {
+	t.Run("sets enabled=false for plugin-prefixed servers", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
+
+		existingContent := `{
+			"mcp": {
+				"my-plugin.server1": {
+					"command": ["node", "s1.js"],
+					"enabled": true,
+					"type": "local"
+				},
+				"my-plugin.server2": {
+					"command": ["python", "s2.py"],
+					"enabled": true,
+					"type": "local"
+				},
+				"other-plugin.server": {
+					"command": ["ruby", "s.rb"],
+					"enabled": true,
+					"type": "local"
+				}
+			}
+		}`
+		if err := os.WriteFile(filepath.Join(tmpDir, "opencode.json"), []byte(existingContent), 0644); err != nil {
+			t.Fatalf("Failed to write opencode.json: %v", err)
+		}
+
+		if err := mgr.DisableMCPConfig("my-plugin"); err != nil {
+			t.Fatalf("DisableMCPConfig failed: %v", err)
+		}
+
+		data, _ := os.ReadFile(filepath.Join(tmpDir, "opencode.json"))
+
+		var config map[string]json.RawMessage
+		json.Unmarshal(data, &config)
+
+		var mcp map[string]OpenCodeMCPServer
+		json.Unmarshal(config["mcp"], &mcp)
+
+		if mcp["my-plugin.server1"].Enabled {
+			t.Error("Expected my-plugin.server1 to be disabled")
+		}
+		if mcp["my-plugin.server2"].Enabled {
+			t.Error("Expected my-plugin.server2 to be disabled")
+		}
+		if !mcp["other-plugin.server"].Enabled {
+			t.Error("Expected other-plugin.server to remain enabled")
+		}
+	})
+
+	t.Run("no-op when no matching servers", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
+
+		existingContent := `{
+			"mcp": {
+				"other.server": {
+					"command": ["node", "s.js"],
+					"enabled": true,
+					"type": "local"
+				}
+			}
+		}`
+		os.WriteFile(filepath.Join(tmpDir, "opencode.json"), []byte(existingContent), 0644)
+
+		if err := mgr.DisableMCPConfig("my-plugin"); err != nil {
+			t.Fatalf("DisableMCPConfig failed: %v", err)
+		}
+
+		data, _ := os.ReadFile(filepath.Join(tmpDir, "opencode.json"))
+		var config map[string]json.RawMessage
+		json.Unmarshal(data, &config)
+		var mcp map[string]OpenCodeMCPServer
+		json.Unmarshal(config["mcp"], &mcp)
+
+		if !mcp["other.server"].Enabled {
+			t.Error("Expected other.server to remain enabled")
+		}
+	})
+
+	t.Run("no-op when config file missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
+
+		if err := mgr.DisableMCPConfig("my-plugin"); err != nil {
+			t.Errorf("Expected no error for missing config, got: %v", err)
+		}
+	})
+}
+
+func TestEnableMCPConfig(t *testing.T) {
+	t.Run("sets enabled=true for plugin-prefixed servers", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
+
+		existingContent := `{
+			"mcp": {
+				"my-plugin.server1": {
+					"command": ["node", "s1.js"],
+					"enabled": false,
+					"type": "local"
+				},
+				"my-plugin.server2": {
+					"command": ["python", "s2.py"],
+					"enabled": false,
+					"type": "local"
+				},
+				"other-plugin.server": {
+					"command": ["ruby", "s.rb"],
+					"enabled": true,
+					"type": "local"
+				}
+			}
+		}`
+		os.WriteFile(filepath.Join(tmpDir, "opencode.json"), []byte(existingContent), 0644)
+
+		if err := mgr.EnableMCPConfig("my-plugin"); err != nil {
+			t.Fatalf("EnableMCPConfig failed: %v", err)
+		}
+
+		data, _ := os.ReadFile(filepath.Join(tmpDir, "opencode.json"))
+		var config map[string]json.RawMessage
+		json.Unmarshal(data, &config)
+		var mcp map[string]OpenCodeMCPServer
+		json.Unmarshal(config["mcp"], &mcp)
+
+		if !mcp["my-plugin.server1"].Enabled {
+			t.Error("Expected my-plugin.server1 to be enabled")
+		}
+		if !mcp["my-plugin.server2"].Enabled {
+			t.Error("Expected my-plugin.server2 to be enabled")
+		}
+		if !mcp["other-plugin.server"].Enabled {
+			t.Error("Expected other-plugin.server to remain enabled")
+		}
+	})
+
+	t.Run("preserves user-modified server config when enabling", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
+
+		existingContent := `{
+			"mcp": {
+				"my-plugin.server": {
+					"command": ["node", "custom-server.js"],
+					"enabled": false,
+					"type": "local",
+					"environment": {"DEBUG": "true"}
+				}
+			}
+		}`
+		os.WriteFile(filepath.Join(tmpDir, "opencode.json"), []byte(existingContent), 0644)
+
+		mgr.EnableMCPConfig("my-plugin")
+
+		data, _ := os.ReadFile(filepath.Join(tmpDir, "opencode.json"))
+		var config map[string]json.RawMessage
+		json.Unmarshal(data, &config)
+		var mcp map[string]OpenCodeMCPServer
+		json.Unmarshal(config["mcp"], &mcp)
+
+		server := mcp["my-plugin.server"]
+		if len(server.Command) != 2 || server.Command[0] != "node" || server.Command[1] != "custom-server.js" {
+			t.Errorf("Expected command preserved, got %v", server.Command)
+		}
+		if server.Environment["DEBUG"] != "true" {
+			t.Error("Expected environment to be preserved")
+		}
+	})
+}
+
 func TestSubstituteVariables(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))

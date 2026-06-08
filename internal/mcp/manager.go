@@ -226,6 +226,66 @@ func (m *Manager) UninstallMCPConfig(pluginName string) error {
 	return m.writeOpenCodeConfig(opencodeConfig)
 }
 
+func (m *Manager) DisableMCPConfig(pluginName string) error {
+	opencodeConfig, err := m.readOpenCodeConfig()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	if opencodeConfig.MCP == nil {
+		return nil
+	}
+
+	prefix := fmt.Sprintf("%s.", pluginName)
+	changed := false
+	for name, server := range opencodeConfig.MCP {
+		if strings.HasPrefix(name, prefix) && server.Enabled {
+			server.Enabled = false
+			opencodeConfig.MCP[name] = server
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	return m.writeOpenCodeConfig(opencodeConfig)
+}
+
+func (m *Manager) EnableMCPConfig(pluginName string) error {
+	opencodeConfig, err := m.readOpenCodeConfig()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	if opencodeConfig.MCP == nil {
+		return nil
+	}
+
+	prefix := fmt.Sprintf("%s.", pluginName)
+	changed := false
+	for name, server := range opencodeConfig.MCP {
+		if strings.HasPrefix(name, prefix) && !server.Enabled {
+			server.Enabled = true
+			opencodeConfig.MCP[name] = server
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+
+	return m.writeOpenCodeConfig(opencodeConfig)
+}
+
 func (m *Manager) ListMCPServers() (map[string]MCPServer, error) {
 	opencodeConfig, err := m.readOpenCodeConfig()
 	if err != nil {
