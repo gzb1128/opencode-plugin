@@ -112,6 +112,11 @@ Examples:
 func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, pluginName, marketName string) error {
 	key := fmt.Sprintf("%s@%s", pluginName, marketName)
 
+	wasDisabled := false
+	if record, err := configMgr.GetInstallRecord(key); err == nil {
+		wasDisabled = record.Disabled
+	}
+
 	if err := installer.Remove(pluginName, marketName); err != nil {
 		return fmt.Errorf("failed to remove old version: %w", err)
 	}
@@ -127,13 +132,19 @@ func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, plugin
 		return fmt.Errorf("failed to install new version: %w", err)
 	}
 
+	if wasDisabled {
+		if err := installer.Disable(pluginName, marketName); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to re-disable plugin after update: %v\n", err)
+		}
+	}
+
 	record, err := configMgr.GetInstallRecord(key)
 	if err != nil {
 		return nil
 	}
 
 	if err := installer.CleanupOldVersions(record.InstallPath); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Warning: cache cleanup failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: cache cleanup failed: %v\n", err)
 	}
 
 	return nil
