@@ -10,8 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var forceUpdate bool
-
 var updateCmd = &cobra.Command{
 	Use:   "update [<plugin-name>[@<marketplace>]]",
 	Short: "Update installed plugins",
@@ -26,7 +24,7 @@ Examples:
   opencode-plugin plugin update --force my-plugin`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		forceUpdate, _ = cmd.Flags().GetBool("force")
+		force, _ := cmd.Flags().GetBool("force")
 		configMgr, err := config.NewManager()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to initialize config: %v\n", err)
@@ -46,7 +44,6 @@ Examples:
 		}
 
 		if len(args) == 0 {
-			// Update all plugins
 			fmt.Printf("Updating all installed plugins (%d)...\n\n", len(installed))
 			updated := 0
 			failed := 0
@@ -56,16 +53,15 @@ Examples:
 					continue
 				}
 
-				// Parse plugin name and market
-				parts := strings.Split(key, "@")
-				if len(parts) != 2 {
+				idx := strings.LastIndex(key, "@")
+				if idx <= 0 {
 					continue
 				}
-				pluginName := parts[0]
-				marketName := parts[1]
+				pluginName := key[:idx]
+				marketName := key[idx+1:]
 
 				fmt.Printf("Updating %s...\n", key)
-				if err := updatePlugin(installer, configMgr, pluginName, marketName); err != nil {
+				if err := updatePlugin(installer, configMgr, pluginName, marketName, force, &records[0]); err != nil {
 					fmt.Fprintf(os.Stderr, "  Error: %v\n\n", err)
 					failed++
 				} else {
@@ -75,31 +71,13 @@ Examples:
 
 			fmt.Printf("\n✓ Updated %d plugins, %d failed\n", updated, failed)
 		} else {
-			// Update specific plugin
-			pluginSpec := args[0]
-
-			var pluginName, marketName string
-			if idx := strings.Index(pluginSpec, "@"); idx > 0 {
-				pluginName = pluginSpec[:idx]
-				marketName = pluginSpec[idx+1:]
-			} else {
-				pluginName = pluginSpec
-				// Find the plugin in installed list
-				for key := range installed {
-					if strings.HasPrefix(key, pluginName+"@") {
-						parts := strings.Split(key, "@")
-						marketName = parts[1]
-						break
-					}
-				}
-			}
-
-			if marketName == "" {
+			pluginName, marketName, resolved := resolveMarketName(installer, args[0], actionUpdate)
+			if !resolved {
 				fmt.Fprintf(os.Stderr, "Error: Plugin %s not found in installed list\n", pluginName)
 				os.Exit(1)
 			}
 
-			if err := updatePlugin(installer, configMgr, pluginName, marketName); err != nil {
+			if err := updatePlugin(installer, configMgr, pluginName, marketName, force); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
@@ -109,10 +87,23 @@ Examples:
 	},
 }
 
-func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, pluginName, marketName string) error {
+func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, pluginName, marketName string, force bool, preloadedRecord ...*config.InstallRecord) error {
 	key := fmt.Sprintf("%s@%s", pluginName, marketName)
 
-	if err := installer.Remove(pluginName, marketName); err != nil {
+	var existingRecord *config.InstallRecord
+	if len(preloadedRecord) > 0 && preloadedRecord[0] != nil {
+		existingRecord = preloadedRecord[0]
+	} else if record, err := configMgr.GetInstallRecord(key); err == nil {
+		existingRecord = record
+	}
+
+	wasDisabled := existingRecord != nil && existingRecord.Disabled
+
+	if wasDisabled {
+		if err := installer.Disable(pluginName, marketName); err != nil {
+			return fmt.Errorf("failed to prepare disabled plugin for update: %w", err)
+		}
+	} else if err := installer.Remove(pluginName, marketName); err != nil {
 		return fmt.Errorf("failed to remove old version: %w", err)
 	}
 
@@ -120,7 +111,11 @@ func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, plugin
 		MarketName: marketName,
 		Version:    "",
 		Scope:      "user",
-		Force:      forceUpdate,
+		Force:      force,
+	}
+
+	if wasDisabled {
+		opts.Disabled = true
 	}
 
 	if err := installer.Install(pluginName, opts); err != nil {
@@ -133,13 +128,8 @@ func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, plugin
 	}
 
 	if err := installer.CleanupOldVersions(record.InstallPath); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  Warning: cache cleanup failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: cache cleanup failed: %v\n", err)
 	}
 
 	return nil
-}
-
-func init() {
-	updateCmd.Flags().BoolP("force", "f", false, "Force overwrite existing skills, commands, and agents")
-	Cmd.AddCommand(updateCmd)
 }

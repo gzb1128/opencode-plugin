@@ -2,9 +2,11 @@ package plugin
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/opencode/plugin-cli/internal/config"
 	"github.com/opencode/plugin-cli/internal/marketplace"
@@ -33,6 +35,265 @@ func setupInstallerTest(t *testing.T) (*Installer, string) {
 	}
 
 	return installer, paths.BaseDir
+}
+
+func setupInstalledPlugin(t *testing.T, installer *Installer, pluginName, marketName string) string {
+	t.Helper()
+	paths := installer.configMgr.GetPaths()
+
+	cachePath := filepath.Join(paths.CacheDir, marketName, pluginName, "1.0.0")
+	skillsDir := filepath.Join(cachePath, "skills")
+	os.MkdirAll(skillsDir, 0755)
+	os.WriteFile(filepath.Join(skillsDir, "test-skill.md"), []byte("# Test Skill"), 0644)
+
+	manifestDir := filepath.Join(cachePath, ".claude-plugin")
+	os.MkdirAll(manifestDir, 0755)
+	os.WriteFile(filepath.Join(manifestDir, "plugin.json"), []byte(`{"name":"`+pluginName+`","version":"1.0.0"}`), 0644)
+
+	key := fmt.Sprintf("%s@%s", pluginName, marketName)
+	record := &config.InstallRecord{
+		Scope:       "user",
+		InstallPath: cachePath,
+		Version:     "1.0.0",
+		InstalledAt: time.Now(),
+	}
+	installer.configMgr.AddInstallRecord(key, record)
+
+	manifest, _ := opencode.ReadManifest(filepath.Join(cachePath, ".claude-plugin", "plugin.json"))
+	installer.linker.CreateSymlinksFromManifest(cachePath, manifest, false)
+
+	return cachePath
+}
+
+func TestInstaller_Disable(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	cachePath := setupInstalledPlugin(t, installer, "test-plugin", "test-market")
+	paths := installer.configMgr.GetPaths()
+
+	symlinkPath := filepath.Join(paths.AgentsDir, "skills", "test-skill.md")
+	if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+		t.Fatalf("symlink should exist before disable")
+	}
+
+	if err := installer.Disable("test-plugin", "test-market"); err != nil {
+		t.Fatalf("Disable() error = %v", err)
+	}
+
+	if _, err := os.Lstat(symlinkPath); !os.IsNotExist(err) {
+		t.Error("symlink should be removed after disable")
+	}
+
+	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+		t.Error("cache directory should still exist after disable")
+	}
+
+	record, err := installer.configMgr.GetInstallRecord("test-plugin@test-market")
+	if err != nil {
+		t.Fatalf("install record should still exist: %v", err)
+	}
+	if !record.Disabled {
+		t.Error("record should be marked as disabled")
+	}
+}
+
+func TestInstaller_Disable_Idempotent(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	setupInstalledPlugin(t, installer, "test-plugin", "test-market")
+
+	if err := installer.Disable("test-plugin", "test-market"); err != nil {
+		t.Fatalf("first disable failed: %v", err)
+	}
+
+	if err := installer.Disable("test-plugin", "test-market"); err != nil {
+		t.Fatalf("second disable (idempotent) failed: %v", err)
+	}
+
+	record, _ := installer.configMgr.GetInstallRecord("test-plugin@test-market")
+	if !record.Disabled {
+		t.Error("record should still be disabled after idempotent retry")
+	}
+}
+
+func TestInstaller_Enable(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+	setupInstalledPlugin(t, installer, "test-plugin", "test-market")
+
+	if err := installer.Disable("test-plugin", "test-market"); err != nil {
+		t.Fatalf("Disable() error = %v", err)
+	}
+
+	symlinkPath := filepath.Join(paths.AgentsDir, "skills", "test-skill.md")
+	if _, err := os.Lstat(symlinkPath); !os.IsNotExist(err) {
+		t.Error("symlink should not exist after disable")
+	}
+
+	if err := installer.Enable("test-plugin", "test-market", false); err != nil {
+		t.Fatalf("Enable() error = %v", err)
+	}
+
+	if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+		t.Error("symlink should exist after enable")
+	}
+
+	record, err := installer.configMgr.GetInstallRecord("test-plugin@test-market")
+	if err != nil {
+		t.Fatalf("GetInstallRecord() error = %v", err)
+	}
+	if record.Disabled {
+		t.Error("record should not be disabled after enable")
+	}
+}
+
+func TestInstaller_Enable_PreservesExistingMCPConfig(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+	cachePath := setupInstalledPlugin(t, installer, "test-plugin", "test-market")
+
+	manifestPath := filepath.Join(cachePath, ".claude-plugin", "plugin.json")
+	manifest := `{
+		"name": "test-plugin",
+		"version": "1.0.0",
+		"mcpServers": {
+			"server": {
+				"command": "node",
+				"args": ["default.js"]
+			}
+		}
+	}`
+	os.WriteFile(manifestPath, []byte(manifest), 0644)
+
+	installer.linker.RemoveSymlinks(cachePath)
+	installer.configMgr.MutateInstallRecord("test-plugin@test-market", func(record *config.InstallRecord) {
+		record.Disabled = true
+		record.DisabledAt = time.Now()
+	})
+
+	existingContent := `{
+		"mcp": {
+			"test-plugin.server": {
+				"type": "local",
+				"command": ["node", "custom.js"],
+				"enabled": false,
+				"environment": {"USER_EDIT": "yes"}
+			}
+		}
+	}`
+	os.MkdirAll(paths.OpenCodeConfig, 0755)
+	os.WriteFile(filepath.Join(paths.OpenCodeConfig, "opencode.json"), []byte(existingContent), 0644)
+
+	if err := installer.Enable("test-plugin", "test-market", false); err != nil {
+		t.Fatalf("Enable() error = %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(paths.OpenCodeConfig, "opencode.json"))
+	var config map[string]json.RawMessage
+	json.Unmarshal(data, &config)
+	var mcpConfig map[string]mcp.OpenCodeMCPServer
+	json.Unmarshal(config["mcp"], &mcpConfig)
+
+	server := mcpConfig["test-plugin.server"]
+	if !server.Enabled {
+		t.Fatal("expected MCP server to be enabled")
+	}
+	if len(server.Command) != 2 || server.Command[1] != "custom.js" {
+		t.Fatalf("expected user-modified command to be preserved, got %v", server.Command)
+	}
+	if server.Environment["USER_EDIT"] != "yes" {
+		t.Fatal("expected user-modified environment to be preserved")
+	}
+}
+
+func TestInstaller_Enable_Idempotent(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	setupInstalledPlugin(t, installer, "test-plugin", "test-market")
+
+	installer.Disable("test-plugin", "test-market")
+
+	if err := installer.Enable("test-plugin", "test-market", false); err != nil {
+		t.Fatalf("first enable failed: %v", err)
+	}
+
+	if err := installer.Enable("test-plugin", "test-market", false); err != nil {
+		t.Fatalf("second enable (idempotent) failed: %v", err)
+	}
+
+	record, _ := installer.configMgr.GetInstallRecord("test-plugin@test-market")
+	if record.Disabled {
+		t.Error("record should still be enabled after idempotent retry")
+	}
+}
+
+func TestInstaller_Enable_AfterPartialDisable(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+	cachePath := setupInstalledPlugin(t, installer, "test-plugin", "test-market")
+
+	symlinkPath := filepath.Join(paths.AgentsDir, "skills", "test-skill.md")
+
+	key := "test-plugin@test-market"
+	installer.configMgr.MutateInstallRecord(key, func(record *config.InstallRecord) {
+		record.Disabled = true
+		record.DisabledAt = time.Now()
+	})
+
+	if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+		t.Fatal("symlink should still exist (only record was changed)")
+	}
+
+	if err := installer.Enable("test-plugin", "test-market", false); err != nil {
+		t.Fatalf("Enable after partial disable failed: %v", err)
+	}
+
+	if _, err := os.Lstat(symlinkPath); os.IsNotExist(err) {
+		t.Error("symlink should still exist after enable (was never removed)")
+	}
+
+	record, _ := installer.configMgr.GetInstallRecord(key)
+	if record.Disabled {
+		t.Error("record should be enabled now")
+	}
+
+	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+		t.Error("cache should still exist")
+	}
+}
+
+func TestInstaller_Disable_NotInstalled(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+
+	err := installer.Disable("nonexistent", "market")
+	if err == nil {
+		t.Error("expected error when disabling non-installed plugin")
+	}
+}
+
+func TestInstaller_Enable_NotInstalled(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+
+	err := installer.Enable("nonexistent", "market", false)
+	if err == nil {
+		t.Error("expected error when enabling non-installed plugin")
+	}
+}
+
+func TestInstaller_Enable_CacheMissing(t *testing.T) {
+	installer, _ := setupInstallerTest(t)
+
+	key := "missing@test-market"
+	record := &config.InstallRecord{
+		Scope:       "user",
+		InstallPath: "/nonexistent/path",
+		Version:     "1.0.0",
+		InstalledAt: time.Now(),
+		Disabled:    true,
+	}
+	installer.configMgr.AddInstallRecord(key, record)
+
+	err := installer.Enable("missing", "test-market", false)
+	if err == nil {
+		t.Error("expected error when enabling plugin with missing cache")
+	}
 }
 
 func TestInstall_WithDependencies(t *testing.T) {
@@ -434,6 +695,136 @@ func TestInstall_DisplayNameDoesNotAffectPluginID(t *testing.T) {
 	}
 
 	installer.configMgr.RemoveInstallRecord("tool@test-market")
+}
+
+func TestInstall_Disabled_SkipsSymlinksAndMCP(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	marketPath := filepath.Join(tmpDir, "market")
+	pluginSrcPath := filepath.Join(marketPath, "plugins", "my-plugin")
+	os.MkdirAll(filepath.Join(pluginSrcPath, "skills"), 0755)
+	os.WriteFile(filepath.Join(pluginSrcPath, "skills", "my-skill.md"), []byte("# My Skill"), 0644)
+
+	manifestDir := filepath.Join(pluginSrcPath, ".claude-plugin")
+	os.MkdirAll(manifestDir, 0755)
+	os.WriteFile(filepath.Join(manifestDir, "plugin.json"), []byte(`{"name":"my-plugin","version":"1.0.0"}`), 0644)
+
+	marketJSON := `{
+		"name": "test-market",
+		"plugins": [
+			{
+				"name": "my-plugin",
+				"description": "Test",
+				"source": "./plugins/my-plugin"
+			}
+		]
+	}`
+
+	indexPath := filepath.Join(marketPath, ".claude-plugin", "marketplace.json")
+	os.MkdirAll(filepath.Dir(indexPath), 0755)
+	os.WriteFile(indexPath, []byte(marketJSON), 0755)
+
+	installer, _ := setupInstallerTest(t)
+	paths := installer.configMgr.GetPaths()
+
+	src := &marketplace.LocalMarketSource{Path: marketPath}
+	src.SetInstallLocation(marketPath)
+
+	if err := installer.configMgr.AddKnownMarket("test-market", marketplace.MarketSourceToConfig(src)); err != nil {
+		t.Fatalf("AddKnownMarket error: %v", err)
+	}
+
+	if err := installer.Install("my-plugin", InstallOptions{MarketName: "test-market", Scope: "user", Disabled: true}); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+
+	record, err := installer.configMgr.GetInstallRecord("my-plugin@test-market")
+	if err != nil {
+		t.Fatalf("record should exist: %v", err)
+	}
+	if !record.Disabled {
+		t.Error("record should be disabled")
+	}
+
+	symlinkPath := filepath.Join(paths.AgentsDir, "skills", "my-skill.md")
+	if _, err := os.Lstat(symlinkPath); !os.IsNotExist(err) {
+		t.Error("symlink should NOT exist for disabled install")
+	}
+
+	installer.configMgr.RemoveInstallRecord("my-plugin@test-market")
+}
+
+func TestInstall_DisabledDependencyNotReenabled(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	marketPath := filepath.Join(tmpDir, "market")
+	depSrcPath := filepath.Join(marketPath, "plugins", "dep")
+	rootSrcPath := filepath.Join(marketPath, "plugins", "root")
+	os.MkdirAll(filepath.Join(depSrcPath, "skills"), 0755)
+	os.MkdirAll(filepath.Join(rootSrcPath, "skills"), 0755)
+	os.WriteFile(filepath.Join(depSrcPath, "skills", "dep-skill.md"), []byte("# Dep Skill"), 0644)
+	os.WriteFile(filepath.Join(rootSrcPath, "skills", "root-skill.md"), []byte("# Root Skill"), 0644)
+
+	depManifestDir := filepath.Join(depSrcPath, ".claude-plugin")
+	os.MkdirAll(depManifestDir, 0755)
+	os.WriteFile(filepath.Join(depManifestDir, "plugin.json"), []byte(`{"name":"dep","version":"1.0.0"}`), 0644)
+
+	rootManifestDir := filepath.Join(rootSrcPath, ".claude-plugin")
+	os.MkdirAll(rootManifestDir, 0755)
+	os.WriteFile(filepath.Join(rootManifestDir, "plugin.json"), []byte(`{"name":"root","version":"2.0.0"}`), 0644)
+
+	marketJSON := `{
+		"name": "test-market",
+		"plugins": [
+			{
+				"name": "dep",
+				"description": "Dependency plugin",
+				"source": "./plugins/dep"
+			},
+			{
+				"name": "root",
+				"description": "Root plugin with dep",
+				"source": "./plugins/root",
+				"dependencies": ["dep"]
+			}
+		]
+	}`
+
+	indexPath := filepath.Join(marketPath, ".claude-plugin", "marketplace.json")
+	os.MkdirAll(filepath.Dir(indexPath), 0755)
+	os.WriteFile(indexPath, []byte(marketJSON), 0755)
+
+	installer, _ := setupInstallerTest(t)
+
+	src := &marketplace.LocalMarketSource{Path: marketPath}
+	src.SetInstallLocation(marketPath)
+
+	if err := installer.configMgr.AddKnownMarket("test-market", marketplace.MarketSourceToConfig(src)); err != nil {
+		t.Fatalf("AddKnownMarket error: %v", err)
+	}
+
+	if err := installer.Install("dep", InstallOptions{MarketName: "test-market", Scope: "user"}); err != nil {
+		t.Fatalf("install dep failed: %v", err)
+	}
+
+	if err := installer.Disable("dep", "test-market"); err != nil {
+		t.Fatalf("disable dep failed: %v", err)
+	}
+
+	if err := installer.Install("root", InstallOptions{MarketName: "test-market", Scope: "user"}); err != nil {
+		t.Fatalf("install root failed: %v", err)
+	}
+
+	depRecord, err := installer.configMgr.GetInstallRecord("dep@test-market")
+	if err != nil {
+		t.Fatalf("dep record missing: %v", err)
+	}
+	if !depRecord.Disabled {
+		t.Error("dep should remain disabled after installing root")
+	}
+
+	installer.configMgr.RemoveInstallRecord("dep@test-market")
+	installer.configMgr.RemoveInstallRecord("root@test-market")
 }
 
 func TestIsWithinDir(t *testing.T) {

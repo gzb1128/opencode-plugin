@@ -28,7 +28,7 @@ Examples:
 		force, _ := cmd.Flags().GetBool("force")
 
 		var pluginName, marketName string
-		if idx := strings.Index(pluginSpec, "@"); idx > 0 {
+		if idx := strings.LastIndex(pluginSpec, "@"); idx > 0 {
 			pluginName = pluginSpec[:idx]
 			marketName = pluginSpec[idx+1:]
 		} else {
@@ -42,6 +42,37 @@ Examples:
 		}
 
 		installer := plugin.NewInstaller(configMgr)
+
+		installed, err := installer.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to list installed plugins: %v\n", err)
+			os.Exit(1)
+		}
+
+		disabledKeys := findDisabledInstallMatches(installed, pluginName, marketName, version)
+
+		if len(disabledKeys) > 1 {
+			fmt.Fprintf(os.Stderr, "Error: Multiple disabled installations of %s found:\n", pluginName)
+			for _, k := range disabledKeys {
+				fmt.Fprintf(os.Stderr, "  - %s\n", k)
+			}
+			fmt.Fprintf(os.Stderr, "\nPlease specify which one to enable:\n")
+			fmt.Fprintf(os.Stderr, "  opencode-plugin plugin install %s\n", disabledKeys[0])
+			os.Exit(1)
+		}
+
+		if len(disabledKeys) == 1 {
+			existingKey := disabledKeys[0]
+			if idx := strings.LastIndex(existingKey, "@"); idx > 0 {
+				marketName = existingKey[idx+1:]
+			}
+			fmt.Printf("Plugin %s is installed but disabled. Enabling...\n", existingKey)
+			if err := installer.Enable(pluginName, marketName, force); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 
 		opts := plugin.InstallOptions{
 			Version:    version,
@@ -57,22 +88,33 @@ Examples:
 	},
 }
 
+func findDisabledInstallMatches(installed map[string][]config.InstallRecord, pluginName, marketName, version string) []string {
+	var matches []string
+	for key, records := range installed {
+		if len(records) == 0 || !records[0].Disabled {
+			continue
+		}
+		idx := strings.LastIndex(key, "@")
+		if idx <= 0 || key[:idx] != pluginName {
+			continue
+		}
+		if marketName != "" && key[idx+1:] != marketName {
+			continue
+		}
+		if version != "" && records[0].Version != version {
+			continue
+		}
+		matches = append(matches, key)
+	}
+	sort.Strings(matches)
+	return matches
+}
+
 var removeCmd = &cobra.Command{
 	Use:   "remove <plugin-name>[@<marketplace>]",
 	Short: "Remove an installed plugin",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		pluginSpec := args[0]
-
-		// Parse plugin spec
-		var pluginName, marketName string
-		if idx := strings.Index(pluginSpec, "@"); idx >= 0 {
-			pluginName = pluginSpec[:idx]
-			marketName = pluginSpec[idx+1:]
-		} else {
-			pluginName = pluginSpec
-		}
-
 		configMgr, err := config.NewManager()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to initialize config: %v\n", err)
@@ -81,38 +123,10 @@ var removeCmd = &cobra.Command{
 
 		installer := plugin.NewInstaller(configMgr)
 
-		// If market name not specified (no @ in spec), try to find the plugin
-		if !strings.Contains(pluginSpec, "@") {
-			installed, err := installer.List()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: Failed to list installed plugins: %v\n", err)
-				os.Exit(1)
-			}
-
-			// Find all matching plugins
-			var matches []string
-			for key := range installed {
-				if strings.HasPrefix(key, pluginName+"@") {
-					matches = append(matches, key)
-				}
-			}
-
-			// If multiple matches, show them to user
-			if len(matches) > 1 {
-				fmt.Fprintf(os.Stderr, "Error: Multiple installations of %s found:\n", pluginName)
-				for _, match := range matches {
-					fmt.Fprintf(os.Stderr, "  - %s\n", match)
-				}
-				fmt.Fprintf(os.Stderr, "\nPlease specify which one to remove:\n")
-				fmt.Fprintf(os.Stderr, "  opencode-plugin plugin remove %s\n", matches[0])
-				os.Exit(1)
-			}
-
-			// If exactly one match, use it
-			if len(matches) == 1 {
-				key := matches[0]
-				marketName = strings.TrimPrefix(key, pluginName+"@")
-			}
+		pluginName, marketName, resolved := resolveMarketName(installer, args[0], actionRemove)
+		if !resolved {
+			fmt.Fprintf(os.Stderr, "Error: Plugin %s not found in installed list\n", pluginName)
+			os.Exit(1)
 		}
 
 		if err := installer.Remove(pluginName, marketName); err != nil {
@@ -129,6 +143,7 @@ type pluginJSONEntry struct {
 	Version     string `json:"version"`
 	InstallPath string `json:"installPath"`
 	InstalledAt string `json:"installedAt"`
+	Disabled    bool   `json:"disabled"`
 }
 
 var listJSONFlag bool
@@ -169,7 +184,11 @@ var listCmd = &cobra.Command{
 				continue
 			}
 			record := records[0]
-			fmt.Printf("  %s\n", key)
+			status := "enabled"
+			if record.Disabled {
+				status = "disabled"
+			}
+			fmt.Printf("  %s [%s]\n", key, status)
 			fmt.Printf("    Version: %s\n", record.Version)
 			fmt.Printf("    Scope: %s\n", record.Scope)
 			fmt.Printf("    Path: %s\n", record.InstallPath)
@@ -199,6 +218,7 @@ func printPluginsJSON(installed map[string][]config.InstallRecord) {
 			Version:     record.Version,
 			InstallPath: record.InstallPath,
 			InstalledAt: record.InstalledAt.Format("2006-01-02T15:04:05Z07:00"),
+			Disabled:    record.Disabled,
 		}
 		entries = append(entries, entry)
 	}
@@ -208,14 +228,4 @@ func printPluginsJSON(installed map[string][]config.InstallRecord) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	enc.Encode(entries)
-}
-
-func init() {
-	installCmd.Flags().StringP("version", "v", "", "Plugin version to install")
-	installCmd.Flags().BoolP("force", "f", false, "Force overwrite existing skills, commands, and agents")
-	listCmd.Flags().BoolVar(&listJSONFlag, "json", false, "Output as JSON")
-
-	Cmd.AddCommand(installCmd)
-	Cmd.AddCommand(removeCmd)
-	Cmd.AddCommand(listCmd)
 }
