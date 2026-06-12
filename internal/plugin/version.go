@@ -293,7 +293,18 @@ func (v *VersionResolver) cloneGitSource(gitURL, ref, sha, cachePath string) err
 		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
 	})
 	if err != nil {
+		os.RemoveAll(cachePath)
 		return fmt.Errorf("failed to clone repository: %w", err)
+	}
+
+	repo, err := git.PlainOpen(cachePath)
+	if err != nil {
+		os.RemoveAll(cachePath)
+		return fmt.Errorf("failed to open cloned repository: %w", err)
+	}
+	if _, err := repo.Head(); err != nil {
+		os.RemoveAll(cachePath)
+		return fmt.Errorf("cloned repository has no HEAD (empty or corrupted): %w", err)
 	}
 
 	if sha != "" {

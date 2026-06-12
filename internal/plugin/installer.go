@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/opencode/plugin-cli/internal/config"
 	"github.com/opencode/plugin-cli/internal/marketplace"
 	"github.com/opencode/plugin-cli/internal/mcp"
@@ -417,7 +418,17 @@ func (i *Installer) materializePlugin(resolved *marketplace.ResolvedPlugin, opts
 	manifestPath := filepath.Join(cachePath, ".claude-plugin", "plugin.json")
 
 	if isRemote {
+		needClone := false
 		if _, err := os.Stat(cachePath); os.IsNotExist(err) {
+			needClone = true
+		} else if !isRepoHealthy(cachePath) {
+			fmt.Printf("  Cached repository is corrupted, re-cloning...\n")
+			if err := os.RemoveAll(cachePath); err != nil {
+				return nil, fmt.Errorf("failed to remove corrupted cache: %w", err)
+			}
+			needClone = true
+		}
+		if needClone {
 			fmt.Printf("  Cloning plugin from remote repository...\n")
 			if err := i.resolver.CloneRemotePlugin(plugin, cachePath); err != nil {
 				return nil, fmt.Errorf("failed to clone plugin: %w", err)
@@ -801,6 +812,17 @@ func isWithinDir(path, base string) bool {
 				return false
 			}
 		}
+	}
+	return true
+}
+
+func isRepoHealthy(path string) bool {
+	repo, err := git.PlainOpen(path)
+	if err != nil {
+		return false
+	}
+	if _, err := repo.Head(); err != nil {
+		return false
 	}
 	return true
 }
