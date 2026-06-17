@@ -1522,3 +1522,52 @@ func TestListMCPServers(t *testing.T) {
 		}
 	})
 }
+
+// RED for #1: writeOpenCodeConfig 不得用一个残缺/损坏的 opencode.json
+// 覆盖掉用户原有的 model/provider/permissions 配置。
+// 现状：读取后 json.Unmarshal 的错误被忽略，fullConfig 停留在 nil，
+// 随后被重置为空 map 并只写入 mcp 键 —— 等于擦除用户配置。
+func TestWriteOpenCodeConfig_CorruptFileIsPreservedNotWiped(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
+
+	corrupt := `{"$schema":"https://opencode.ai/config.json","model":"gpt-x", broken`
+	if err := os.WriteFile(filepath.Join(tmpDir, "opencode.json"), []byte(corrupt), 0644); err != nil {
+		t.Fatalf("seed corrupt opencode.json: %v", err)
+	}
+
+	err := mgr.writeOpenCodeConfig(&OpenCodeConfig{
+		MCP: map[string]OpenCodeMCPServer{
+			"p.s": {Type: "local", Command: []string{"node"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when opencode.json is corrupt, got nil (data-loss risk)")
+	}
+
+	after, readErr := os.ReadFile(filepath.Join(tmpDir, "opencode.json"))
+	if readErr != nil {
+		t.Fatalf("read back opencode.json: %v", readErr)
+	}
+	if string(after) != corrupt {
+		t.Fatalf("opencode.json was modified — user config destroyed.\nwant: %q\ngot:  %q", corrupt, string(after))
+	}
+}
+
+// RED for #6: readOpenCodeConfig 不得在 "mcp" 块是错误类型时
+// 静默吞掉错误并把 MCP 当作空。该错误对调用方必须可见。
+func TestReadOpenCodeConfig_CorruptMCPBlock_ReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
+
+	// 外层 JSON 合法（能被解析为 map[string]json.RawMessage），
+	// 但 "mcp" 值是字符串而非对象 —— 单独 unmarshal 进 map 会失败。
+	content := `{"model":"x","mcp":"not-an-object"}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "opencode.json"), []byte(content), 0644); err != nil {
+		t.Fatalf("seed opencode.json: %v", err)
+	}
+
+	if _, err := mgr.readOpenCodeConfig(); err == nil {
+		t.Fatal("expected error when mcp block is corrupt, got nil (silent corruption)")
+	}
+}

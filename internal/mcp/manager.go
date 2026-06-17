@@ -480,7 +480,9 @@ func (m *Manager) readOpenCodeConfig() (*OpenCodeConfig, error) {
 
 	oc := &OpenCodeConfig{}
 	if raw, ok := fullConfig["mcp"]; ok {
-		json.Unmarshal(raw, &oc.MCP)
+		if err := json.Unmarshal(raw, &oc.MCP); err != nil {
+			return nil, fmt.Errorf("failed to parse mcp block of opencode.json: %w", err)
+		}
 	}
 
 	return oc, nil
@@ -492,7 +494,9 @@ func (m *Manager) writeOpenCodeConfig(oc *OpenCodeConfig) error {
 	var fullConfig map[string]json.RawMessage
 	data, err := os.ReadFile(configPath)
 	if err == nil {
-		json.Unmarshal(data, &fullConfig)
+		if err := json.Unmarshal(data, &fullConfig); err != nil {
+			return fmt.Errorf("failed to parse existing opencode.json (refusing to overwrite): %w", err)
+		}
 	}
 	if fullConfig == nil {
 		fullConfig = make(map[string]json.RawMessage)

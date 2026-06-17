@@ -1121,3 +1121,49 @@ func TestIsWithinDir(t *testing.T) {
 		}
 	})
 }
+
+// RED for #2: 当 CreateSymlinksFromManifest 返回 (nil, err) 时，
+// Install 不得对 nil 的 *ComponentCounts 解引用 —— 否则权限不足等场景下
+// 会 panic。Update 路径已正确做了 nil 检查，Install 路径没有。
+func TestInstall_SymlinkFailureDoesNotPanic(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	marketPath := filepath.Join(tmpDir, "market")
+	srcPath := filepath.Join(marketPath, "plugins", "p")
+	os.MkdirAll(filepath.Join(srcPath, "skills"), 0755)
+	os.WriteFile(filepath.Join(srcPath, "skills", "s.md"), []byte("# S"), 0644)
+	manDir := filepath.Join(srcPath, ".claude-plugin")
+	os.MkdirAll(manDir, 0755)
+	os.WriteFile(filepath.Join(manDir, "plugin.json"), []byte(`{"name":"p","version":"1.0.0"}`), 0644)
+
+	marketJSON := `{"name":"m","plugins":[{"name":"p","source":"./plugins/p"}]}`
+	indexPath := filepath.Join(marketPath, ".claude-plugin", "marketplace.json")
+	os.MkdirAll(filepath.Dir(indexPath), 0755)
+	os.WriteFile(indexPath, []byte(marketJSON), 0755)
+
+	installer, _ := setupInstallerTest(t)
+
+	src := &marketplace.LocalMarketSource{Path: marketPath}
+	src.SetInstallLocation(marketPath)
+	if err := installer.configMgr.AddKnownMarket("m", marketplace.MarketSourceToConfig(src)); err != nil {
+		t.Fatalf("AddKnownMarket: %v", err)
+	}
+
+	// 把 agents 目录替换成一个文件，使 linkComponentDir 的 MkdirAll 失败，
+	// 进而让 CreateSymlinksFromManifest 返回 (nil, err)。
+	agentsDir := installer.configMgr.GetPaths().AgentsDir
+	os.RemoveAll(agentsDir)
+	if err := os.WriteFile(agentsDir, []byte("x"), 0644); err != nil {
+		t.Fatalf("seed agents file: %v", err)
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("Install panicked on symlink failure: %v", r)
+			}
+		}()
+		// 无论 symlink 是否成功，Install 都不应 panic。
+		_ = installer.Install("p", InstallOptions{MarketName: "m", Scope: "user"})
+	}()
+}
