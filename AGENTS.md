@@ -52,6 +52,23 @@ opencode-plugin plugin install my-plugin -f
 ```
 用于强制覆盖已存在的 skills、commands、agents。
 
+### `plugin update` 的原子性（two-phase commit）
+
+`plugin update` 走 `installer.Update()`（`internal/plugin/installer.go`），不再
+是 `Remove() + Install()` 的串联。流程是：
+
+1. **Stage 1（materialize）**：把旧 cache 目录 rename 成 `.update-backup`，然后
+   重新 clone / copy 出新版本。**网络步骤只在这一阶段发生。**
+   - 如果失败：rename 回 `.update-backup` → 原路径，旧 plugin 完整保留，用户无感知。
+2. **Stage 2（swap）**：删旧 symlinks/MCP、建新 symlinks/MCP、覆盖 install record。
+3. **Stage 3（cleanup）**：删 `.update-backup`、`CleanupOldVersions` 清理同 plugin
+   其它历史版本。
+
+**重要**：因为 Stage 1 先 rename 旧 cache，`RemoveSymlinks` 在 Stage 2 调用时旧路径
+已经不存在。symlink target 创建时经过 `EvalSymlinks`（如 macOS `/var` → `/private/var`），
+所以代码里必须用 `EvalSymlinks(oldCachePath)` 解析后的路径传给 `RemoveSymlinks`，
+否则词法路径不匹配会漏删旧 symlink。
+
 ## 本地开发速查
 
 ```bash
