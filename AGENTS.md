@@ -21,8 +21,11 @@ opencode-plugin 是一个 **Claude Code 插件生态兼容层**。它的核心�
 | Plugin 模块 | `docs/design/PLUGIN.md` |
 | Marketplace 模块 | `docs/design/MARKETPLACE.md` |
 | CLI 命令设计 | `docs/design/CLI.md` |
-| MCP 实现 | `docs/MCP.md` |
-| Plugin Update 隐式依赖 | `docs/PLUGIN_UPDATE_MARKETPLACE_DEPENDENCY.md` |
+| 配置管理 | `docs/design/CONFIGURATION.md` |
+| OpenCode 集成 | `docs/design/OPENCODE.md` |
+| MCP 实现（用户指南） | `docs/MCP.md` |
+| MCP 模块设计 | `docs/design/MCP.md` |
+| 使用指南 | `docs/USAGE.md` |
 
 ## 关键隐式知识
 
@@ -36,7 +39,6 @@ Marketplace 中的 plugin 有两种 source 类型，直接影响 `plugin update`
 ```
 - `plugin update` 从 **marketplace 缓存目录** 读取
 - **必须先 `market update` 再 `plugin update`**，否则拿到旧代码
-- 详见：`docs/PLUGIN_UPDATE_MARKETPLACE_DEPENDENCY.md`
 
 **Remote Source（远程对象）** — plugin 代码在独立仓库
 ```json
