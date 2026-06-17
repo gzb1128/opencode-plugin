@@ -527,6 +527,192 @@ func (i *Installer) generateFallbackManifest(plugin *marketplace.Plugin, cachePa
 	return os.WriteFile(manifestPath, append(data, '\n'), 0644)
 }
 
+// Update downloads the latest version of an installed plugin and swaps it
+// with the currently-installed version.
+//
+// 与 Remove+Install 序列不同，Update 先把新版本下载到 cache（最危险的网络步骤），
+// 只有在下载成功之后才动旧版本的 symlinks / MCP / install record。如果下载失败，
+// 旧版本完整保留，用户无需手动重装。
+//
+// 实现要点：
+//   - Stage 1（materialize）：把旧 cache 目录 rename 成 .update-backup，然后让
+//     materializePlugin 在原路径上重新 clone/copy。失败时 rename 回去即可回滚。
+//   - Stage 2（swap）：删除旧 symlinks/MCP，建立新 symlinks/MCP，覆盖 install
+//     record。这些都是本地文件操作，失败概率远低于网络。
+//   - Stage 3（cleanup）：删除 .update-backup；如果新旧 cache 路径不同，也删旧路径。
+//     最后调用 CleanupOldVersions 清理同 plugin 的其它历史版本。
+func (i *Installer) Update(pluginName string, opts InstallOptions) error {
+	// ===== Stage 0: Resolve plugin from marketplace（无副作用）=====
+	markets, err := i.configMgr.LoadKnownMarkets()
+	if err != nil {
+		return fmt.Errorf("failed to load marketplaces: %w", err)
+	}
+
+	marketSources := make(map[string]marketplace.MarketSource)
+	for name, src := range markets {
+		marketSources[name] = marketplace.NewMarketSourceFromConfig(src)
+	}
+
+	resolved, err := i.marketMgr.ResolvePlugin(marketSources, pluginName, opts.MarketName)
+	if err != nil {
+		return err
+	}
+	opts.MarketName = resolved.MarketName
+	key := fmt.Sprintf("%s@%s", resolved.Plugin.Name, opts.MarketName)
+
+	// 记录旧状态，用于 swap / cleanup。记录不存在视作首次安装。
+	var oldCachePath string
+	if oldRecord, err := i.configMgr.GetInstallRecord(key); err == nil && oldRecord != nil {
+		oldCachePath = oldRecord.InstallPath
+	}
+
+	// 在 backup rename 之前先把 oldCachePath 解析成 EvalSymlinks 形式。
+	// RemoveSymlinks 依赖词法路径匹配（filepath.Rel），而 symlink target 创建时
+	// 会经过 EvalSymlinks（例如 macOS 上 /var → /private/var）。如果在 rename 之
+	// 后才取 EvalSymlinks 会失败，导致后续 RemoveSymlinks 匹配不到旧 symlink。
+	// 所以这里在路径还存在时先解析好，留给 Stage 2 用。
+	oldCachePathResolved := oldCachePath
+	if oldCachePath != "" {
+		if ev, err := filepath.EvalSymlinks(oldCachePath); err == nil {
+			oldCachePathResolved = ev
+		}
+	}
+
+	// ===== Stage 1: Materialize 新版本到 cache（最危险的网络步骤）=====
+	// 如果旧 cache 目录存在，先 rename 成 .update-backup。这样：
+	//   (a) 同路径场景（version 不变或 "latest"）：materialize 会发现 cache 不存在，
+	//       重新 clone/copy 出全新内容；
+	//   (b) 不同路径场景：旧路径被 backup，新路径未受影响，materialize 直接 clone 到新路径。
+	// 如果 materialize 失败，把 backup rename 回去即可完整恢复旧版本。
+	backupPath := ""
+	if oldCachePath != "" {
+		if _, statErr := os.Stat(oldCachePath); statErr == nil {
+			backupPath = oldCachePath + ".update-backup"
+			// 如果上一次失败的 update 残留了 backup，先清掉
+			if _, leftoverErr := os.Stat(backupPath); leftoverErr == nil {
+				os.RemoveAll(backupPath)
+			}
+			if err := os.Rename(oldCachePath, backupPath); err != nil {
+				return fmt.Errorf("failed to back up existing cache before update: %w", err)
+			}
+		}
+	}
+
+	mat, err := i.materializePlugin(resolved, opts)
+	if err != nil {
+		// 回滚：把 backup 还原到原路径
+		if backupPath != "" {
+			if rbErr := os.Rename(backupPath, oldCachePath); rbErr != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  Critical: failed to restore cache after failed update: %v\n", rbErr)
+				fmt.Fprintf(os.Stderr, "⚠️  Backup left at: %s (manual recovery required)\n", backupPath)
+			} else {
+				fmt.Printf("✓ Rolled back to previous version (cache restored at %s)\n", oldCachePath)
+			}
+		}
+		return fmt.Errorf("failed to materialize new version: %w", err)
+	}
+
+	// materialize 成功后，无论后续步骤是否成功，backup 都可以清理了——新 cache 已经
+	// 落盘，旧的不再被引用。用 defer 兜底，避免遗漏。
+	if backupPath != "" {
+		defer func() {
+			if rmErr := os.RemoveAll(backupPath); rmErr != nil {
+				fmt.Printf("⚠️  Warning: failed to clean up update backup %s: %v\n", backupPath, rmErr)
+			}
+		}()
+	}
+
+	// 读取新 manifest，用于后续 symlink 创建
+	var manifest map[string]interface{}
+	if mat.ManifestPath != "" {
+		manifest, _ = opencode.ReadManifest(mat.ManifestPath)
+	}
+
+	// ===== Stage 2: Swap（删旧 side-effects，建立新 side-effects）=====
+	// 2a. 删旧 symlinks / MCP。这些指向 OLD 路径；即使新旧路径相同，文件集合也可能变化。
+	//     用 oldCachePathResolved（已 EvalSymlinks）确保和 symlink target 词法一致。
+	if oldCachePathResolved != "" {
+		if _, err := i.linker.RemoveSymlinks(oldCachePathResolved); err != nil {
+			fmt.Printf("⚠️  Warning: failed to remove old symlinks: %v\n", err)
+		}
+	}
+	if err := i.mcpManager.UninstallMCPConfig(resolved.Plugin.Name); err != nil {
+		fmt.Printf("⚠️  Warning: failed to remove old MCP config: %v\n", err)
+	}
+
+	// 2b. 建立新 state（disabled 模式下只写 record，不建 symlinks / MCP）
+	var counts opencode.ComponentCounts
+	var mcpCount int
+	if !opts.Disabled {
+		countsPtr, linkErr := i.linker.CreateSymlinksFromManifest(mat.Path, manifest, opts.Force)
+		if linkErr != nil {
+			fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", linkErr)
+		} else if countsPtr != nil {
+			counts = *countsPtr
+		}
+		mcpCount, err = i.installMCP(mat.Path, resolved.Plugin.Name, opts.MarketName)
+		if err != nil {
+			fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
+		}
+	}
+
+	record := &config.InstallRecord{
+		Scope:       opts.Scope,
+		InstallPath: mat.Path,
+		Version:     mat.Version,
+		InstalledAt: time.Now(),
+	}
+	if opts.Disabled {
+		record.Disabled = true
+		record.DisabledAt = time.Now()
+	}
+	if err := i.configMgr.AddInstallRecord(key, record); err != nil {
+		return fmt.Errorf("failed to record updated installation: %w", err)
+	}
+
+	// ===== Stage 3: Cleanup 历史版本 cache =====
+	// 新旧路径不同时，旧路径还在（不在 backup 里就是没被 rename），删掉。
+	if oldCachePath != "" && oldCachePath != mat.Path {
+		cacheDir := i.configMgr.GetPaths().CacheDir
+		if isWithinDir(oldCachePath, cacheDir) {
+			if err := os.RemoveAll(oldCachePath); err != nil {
+				fmt.Printf("⚠️  Warning: failed to remove old cache %s: %v\n", oldCachePath, err)
+			} else {
+				fmt.Printf("✓ Removed old version cache: %s\n", oldCachePath)
+			}
+		}
+	}
+	// CleanupOldVersions 会扫描同 plugin 下所有未引用的版本目录，统一清理
+	if err := i.CleanupOldVersions(mat.Path); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: cache cleanup failed: %v\n", err)
+	}
+
+	// ===== 日志输出 =====
+	if opts.Disabled {
+		fmt.Printf("✓ Updated disabled plugin: %s@%s\n", resolved.Plugin.Name, mat.Version)
+		fmt.Printf("  From marketplace: %s\n", opts.MarketName)
+		fmt.Printf("  Cache: %s\n", mat.Path)
+	} else {
+		fmt.Printf("✓ Successfully updated plugin: %s@%s\n", resolved.Plugin.Name, mat.Version)
+		fmt.Printf("  From marketplace: %s\n", opts.MarketName)
+		fmt.Printf("  Cache: %s\n", mat.Path)
+		if counts.Skills > 0 {
+			fmt.Printf("  Skills: %d\n", counts.Skills)
+		}
+		if counts.Commands > 0 {
+			fmt.Printf("  Commands: %d\n", counts.Commands)
+		}
+		if counts.Agents > 0 {
+			fmt.Printf("  Agents: %d\n", counts.Agents)
+		}
+		if mcpCount > 0 {
+			fmt.Printf("  MCP Servers: %d\n", mcpCount)
+		}
+	}
+
+	return nil
+}
+
 func (i *Installer) Remove(pluginName, marketName string) error {
 	key := fmt.Sprintf("%s@%s", pluginName, marketName)
 	record, err := i.configMgr.GetInstallRecord(key)

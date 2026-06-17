@@ -90,6 +90,7 @@ Examples:
 func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, pluginName, marketName string, force bool, preloadedRecord ...*config.InstallRecord) error {
 	key := fmt.Sprintf("%s@%s", pluginName, marketName)
 
+	// 读取已有 record，决定保留 disabled 状态
 	var existingRecord *config.InstallRecord
 	if len(preloadedRecord) > 0 && preloadedRecord[0] != nil {
 		existingRecord = preloadedRecord[0]
@@ -99,37 +100,15 @@ func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, plugin
 
 	wasDisabled := existingRecord != nil && existingRecord.Disabled
 
-	if wasDisabled {
-		if err := installer.Disable(pluginName, marketName); err != nil {
-			return fmt.Errorf("failed to prepare disabled plugin for update: %w", err)
-		}
-	} else if err := installer.Remove(pluginName, marketName); err != nil {
-		return fmt.Errorf("failed to remove old version: %w", err)
-	}
-
 	opts := plugin.InstallOptions{
 		MarketName: marketName,
 		Version:    "",
 		Scope:      "user",
 		Force:      force,
+		Disabled:   wasDisabled,
 	}
 
-	if wasDisabled {
-		opts.Disabled = true
-	}
-
-	if err := installer.Install(pluginName, opts); err != nil {
-		return fmt.Errorf("failed to install new version: %w", err)
-	}
-
-	record, err := configMgr.GetInstallRecord(key)
-	if err != nil {
-		return nil
-	}
-
-	if err := installer.CleanupOldVersions(record.InstallPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: cache cleanup failed: %v\n", err)
-	}
-
-	return nil
+	// Update() 内部做了 "先 materialize 再 swap" 的两阶段提交：
+	// 下载失败时旧版本完整保留，不会出现 plugin 被删除后无法恢复的情况。
+	return installer.Update(pluginName, opts)
 }
