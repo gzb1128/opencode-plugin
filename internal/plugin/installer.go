@@ -183,13 +183,13 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 	fmt.Printf("✓ Successfully installed plugin: %s@%s\n", resolved.Plugin.Name, mat.Version)
 	fmt.Printf("  From marketplace: %s\n", opts.MarketName)
 	fmt.Printf("  Cache: %s\n", mat.Path)
-	if counts.Skills > 0 {
+	if counts != nil && counts.Skills > 0 {
 		fmt.Printf("  Skills: %d\n", counts.Skills)
 	}
-	if counts.Commands > 0 {
+	if counts != nil && counts.Commands > 0 {
 		fmt.Printf("  Commands: %d\n", counts.Commands)
 	}
-	if counts.Agents > 0 {
+	if counts != nil && counts.Agents > 0 {
 		fmt.Printf("  Agents: %d\n", counts.Agents)
 	}
 	if mcpCount > 0 {
