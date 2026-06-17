@@ -288,9 +288,12 @@ func (v *VersionResolver) cloneGitSource(gitURL, ref, sha, cachePath string) err
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
+	// 不递归 submodule：很多 plugin 仓库的 .gitmodules 用 SSH URL（如
+	// superpowers 的 evals 子模块），go-git 内置 SSH 客户端拿不到 ssh-agent
+	// 密钥时会握手失败，导致整个 plugin clone 失败。Plugin 运行时几乎不需要
+	// submodule 内容（通常是 evals / tests），所以默认不递归。
 	_, err := git.PlainClone(cachePath, false, &git.CloneOptions{
-		URL:               gitURL,
-		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
+		URL: gitURL,
 	})
 	if err != nil {
 		os.RemoveAll(cachePath)
@@ -333,9 +336,9 @@ func (v *VersionResolver) cloneGitSubdirSource(src *marketplace.GitSubdirSource,
 	}
 	defer os.RemoveAll(tempDir)
 
+	// 同 cloneGitSource，不递归 submodule（见上注释）
 	_, err = git.PlainClone(tempDir, false, &git.CloneOptions{
-		URL:               gitURL,
-		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
+		URL: gitURL,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
