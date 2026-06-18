@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -314,6 +315,76 @@ func TestGetMCPServers(t *testing.T) {
 }
 
 func TestInstallMCPConfig(t *testing.T) {
+	t.Run("preserves unknown fields on existing servers (regression for opencode.json field stripping)", func(t *testing.T) {
+		// 之前 InstallMCPConfig 会把 opencode.json 的 mcp 块 round-trip 进
+		// map[string]OpenCodeMCPServer，导致任何不在该 struct 里的字段
+		// （如 disabledReason、tools、自定义 transport 字段）被静默删除。
+		tmpDir := t.TempDir()
+		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
+
+		// 预先存在的 opencode.json 带有未知字段。
+		existing := `{
+			"model": "gpt-x",
+			"mcp": {
+				"user handwritten": {
+					"type": "local",
+					"command": ["node"],
+					"enabled": true,
+					"disabledReason": "manual pause",
+					"tools": ["fs", "shell"],
+					"customTransport": "webrtc"
+				}
+			}
+		}`
+		configPath := filepath.Join(tmpDir, "opencode.json")
+		if err := os.WriteFile(configPath, []byte(existing), 0644); err != nil {
+			t.Fatalf("seed opencode.json: %v", err)
+		}
+
+		// 准备 plugin：提供一个新的 MCP server。
+		pluginDir := filepath.Join(tmpDir, "my-plugin")
+		pluginJSONDir := filepath.Join(pluginDir, ".claude-plugin")
+		if err := os.MkdirAll(pluginJSONDir, 0755); err != nil {
+			t.Fatalf("create plugin dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(pluginJSONDir, "plugin.json"), []byte(`{"name":"my-plugin","version":"1.0.0"}`), 0644); err != nil {
+			t.Fatalf("write plugin.json: %v", err)
+		}
+		mcpContent := `{"srv":{"command":"npx","args":["foo"]}}`
+		if err := os.WriteFile(filepath.Join(pluginDir, ".mcp.json"), []byte(mcpContent), 0644); err != nil {
+			t.Fatalf("write .mcp.json: %v", err)
+		}
+
+		if err := mgr.InstallMCPConfig(pluginDir, "my-plugin", "test-market"); err != nil {
+			t.Fatalf("InstallMCPConfig failed: %v", err)
+		}
+
+		after, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("read back opencode.json: %v", err)
+		}
+		// 比较时压缩空白，避免和 MarshalIndent 的换行细节耦合。
+		flatten := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+		flat := flatten(string(after))
+
+		// 顶层 model key 必须保留。
+		if !strings.Contains(flat, `"model": "gpt-x"`) {
+			t.Errorf("top-level 'model' key was wiped.\n got: %s", string(after))
+		}
+		// 已有 server 的未知字段必须保留。
+		for _, want := range []string{
+			`"disabledReason": "manual pause"`,
+			`"tools": [ "fs", "shell" ]`,
+			`"customTransport": "webrtc"`,
+			`"user handwritten"`,
+			`"my-plugin.srv"`,
+		} {
+			if !strings.Contains(flat, want) {
+				t.Errorf("expected %s to be preserved in opencode.json.\n got: %s", want, string(after))
+			}
+		}
+	})
+
 	t.Run("installs stdio server to opencode.json with correct format", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		mgr := NewManager(tmpDir, filepath.Join(tmpDir, "data"))
@@ -1536,10 +1607,9 @@ func TestWriteOpenCodeConfig_CorruptFileIsPreservedNotWiped(t *testing.T) {
 		t.Fatalf("seed corrupt opencode.json: %v", err)
 	}
 
-	err := mgr.writeOpenCodeConfig(&OpenCodeConfig{
-		MCP: map[string]OpenCodeMCPServer{
-			"p.s": {Type: "local", Command: []string{"node"}},
-		},
+	err := mgr.mutateMCPRaw(func(mcp map[string]json.RawMessage) (bool, error) {
+		mcp["p.s"] = json.RawMessage(`{"type":"local","command":["node"],"enabled":true}`)
+		return true, nil
 	})
 	if err == nil {
 		t.Fatal("expected error when opencode.json is corrupt, got nil (data-loss risk)")
@@ -1554,7 +1624,7 @@ func TestWriteOpenCodeConfig_CorruptFileIsPreservedNotWiped(t *testing.T) {
 	}
 }
 
-// RED for #6: readOpenCodeConfig 不得在 "mcp" 块是错误类型时
+// RED for #6: readMCPRaw 不得在 "mcp" 块是错误类型时
 // 静默吞掉错误并把 MCP 当作空。该错误对调用方必须可见。
 func TestReadOpenCodeConfig_CorruptMCPBlock_ReturnsError(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -1567,7 +1637,7 @@ func TestReadOpenCodeConfig_CorruptMCPBlock_ReturnsError(t *testing.T) {
 		t.Fatalf("seed opencode.json: %v", err)
 	}
 
-	if _, err := mgr.readOpenCodeConfig(); err == nil {
+	if _, err := mgr.readMCPRaw(); err == nil {
 		t.Fatal("expected error when mcp block is corrupt, got nil (silent corruption)")
 	}
 }

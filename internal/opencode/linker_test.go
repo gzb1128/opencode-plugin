@@ -27,7 +27,7 @@ func TestLinker_CreateSymlinks_DirectoryBased(t *testing.T) {
 	os.MkdirAll(filepath.Join(pluginPath, "agents"), 0755)
 	os.WriteFile(filepath.Join(pluginPath, "agents", "reviewer.md"), []byte("# reviewer"), 0644)
 
-	counts, err := linker.CreateSymlinks(pluginPath)
+	counts, err := linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 	if err != nil {
 		t.Fatalf("CreateSymlinks() error = %v", err)
 	}
@@ -50,7 +50,7 @@ func TestLinker_CreateSymlinks_DirectoryBased(t *testing.T) {
 func TestLinker_CreateSymlinks_NoComponents(t *testing.T) {
 	linker, _, pluginPath := setupLinkerTest(t)
 
-	counts, err := linker.CreateSymlinks(pluginPath)
+	counts, err := linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 	if err != nil {
 		t.Fatalf("CreateSymlinks() error = %v", err)
 	}
@@ -193,7 +193,7 @@ func TestLinker_DefaultComponentDirRejectsSymlinkEscape(t *testing.T) {
 		t.Skipf("symlinks not supported: %v", err)
 	}
 
-	_, err := linker.CreateSymlinks(pluginPath)
+	_, err := linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 	if err == nil {
 		t.Fatal("expected error for symlink escaping plugin root")
 	}
@@ -209,7 +209,7 @@ func TestLinker_RemoveSymlinks(t *testing.T) {
 	os.MkdirAll(filepath.Join(pluginPath, "agents"), 0755)
 	os.WriteFile(filepath.Join(pluginPath, "agents", "reviewer.md"), []byte("# reviewer"), 0644)
 
-	counts, err := linker.CreateSymlinks(pluginPath)
+	counts, err := linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 	if err != nil {
 		t.Fatalf("CreateSymlinks() error = %v", err)
 	}
@@ -244,8 +244,8 @@ func TestLinker_RemoveSymlinks_PreservesOtherLinks(t *testing.T) {
 	os.MkdirAll(filepath.Join(otherPluginPath, "skills", "other-skill"), 0755)
 	os.WriteFile(filepath.Join(otherPluginPath, "skills", "other-skill", "SKILL.md"), []byte("# other"), 0644)
 
-	linker.CreateSymlinks(pluginPath)
-	linker.CreateSymlinks(otherPluginPath)
+	linker.CreateSymlinksFromManifest(pluginPath, nil, false)
+	linker.CreateSymlinksFromManifest(otherPluginPath, nil, false)
 
 	removed, err := linker.RemoveSymlinks(pluginPath)
 	if err != nil {
@@ -270,7 +270,7 @@ func TestLinker_RemoveSymlinks_PreservesNonLinks(t *testing.T) {
 	os.MkdirAll(skillsDir, 0755)
 	os.WriteFile(filepath.Join(skillsDir, "real-file.md"), []byte("# real"), 0644)
 
-	linker.CreateSymlinks(pluginPath)
+	linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 
 	removed, err := linker.RemoveSymlinks(pluginPath)
 	if err != nil {
@@ -294,12 +294,12 @@ func TestLinker_CreateSymlinks_Idempotent(t *testing.T) {
 	os.MkdirAll(filepath.Join(pluginPath, "skills", "coding"), 0755)
 	os.WriteFile(filepath.Join(pluginPath, "skills", "coding", "SKILL.md"), []byte("# coding"), 0644)
 
-	counts1, err := linker.CreateSymlinks(pluginPath)
+	counts1, err := linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 	if err != nil {
 		t.Fatalf("first CreateSymlinks() error = %v", err)
 	}
 
-	counts2, err := linker.CreateSymlinks(pluginPath)
+	counts2, err := linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 	if err != nil {
 		t.Fatalf("second CreateSymlinks() error = %v", err)
 	}
@@ -316,7 +316,7 @@ func TestLinker_CreateSymlinks_ForceOverwrite(t *testing.T) {
 	os.MkdirAll(filepath.Join(pluginPath, "skills", "coding"), 0755)
 	os.WriteFile(filepath.Join(pluginPath, "skills", "coding", "SKILL.md"), []byte("# coding v1"), 0644)
 
-	counts1, err := linker.CreateSymlinks(pluginPath)
+	counts1, err := linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 	if err != nil {
 		t.Fatalf("first CreateSymlinks() error = %v", err)
 	}
@@ -332,7 +332,7 @@ func TestLinker_CreateSymlinks_ForceOverwrite(t *testing.T) {
 
 	// Without force, should skip
 	linker2 := NewLinker(agentsDir)
-	counts2, err := linker2.CreateSymlinks(otherPluginPath)
+	counts2, err := linker2.CreateSymlinksFromManifest(otherPluginPath, nil, false)
 	if err != nil {
 		t.Fatalf("second CreateSymlinks() error = %v", err)
 	}

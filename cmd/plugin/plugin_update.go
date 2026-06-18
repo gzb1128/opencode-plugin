@@ -70,6 +70,10 @@ Examples:
 			}
 
 			fmt.Printf("\n✓ Updated %d plugins, %d failed\n", updated, failed)
+			// 部分失败时必须非零退出，否则 CI / cron / 脚本无法检测到 update 实际上没成功。
+			if failed > 0 {
+				os.Exit(1)
+			}
 		} else {
 			pluginName, marketName, resolved := resolveMarketName(installer, args[0], actionUpdate)
 			if !resolved {

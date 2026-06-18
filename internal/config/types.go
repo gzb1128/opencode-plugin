@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -39,8 +40,17 @@ type Paths struct {
 // Each marketplace info contains: source, repo, url, path, installLocation, lastUpdated
 type KnownMarkets map[string]map[string]interface{}
 
-func DefaultPaths() *Paths {
-	homeDir, _ := os.UserHomeDir()
+// DefaultPaths 返回基于用户 HOME 目录的默认路径。
+// 如果 HOME 无法解析（systemd unit / 容器未设置 $HOME），返回错误而不是
+// 静默退化到 /.opencode-plugin-cli，避免后续 MkdirAll 报出误导性的 permission denied。
+func DefaultPaths() (*Paths, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve user home directory (is $HOME set?): %w", err)
+	}
+	if homeDir == "" {
+		return nil, fmt.Errorf("user home directory is empty (is $HOME set?)")
+	}
 	baseDir := filepath.Join(homeDir, ".opencode-plugin-cli")
 
 	return &Paths{
@@ -52,5 +62,5 @@ func DefaultPaths() *Paths {
 		OpenCodeConfig: filepath.Join(homeDir, ".config", "opencode"),
 		AgentsDir:      filepath.Join(homeDir, ".agents"),
 		PluginDataDir:  filepath.Join(baseDir, "data"),
-	}
+	}, nil
 }

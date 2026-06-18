@@ -31,10 +31,6 @@ type ComponentPath struct {
 	Path string
 }
 
-func (l *Linker) CreateSymlinks(pluginPath string) (*ComponentCounts, error) {
-	return l.CreateSymlinksFromManifest(pluginPath, nil, false)
-}
-
 func (l *Linker) CreateSymlinksFromManifest(pluginPath string, manifestData map[string]interface{}, force bool) (*ComponentCounts, error) {
 	counts := &ComponentCounts{}
 
@@ -101,7 +97,9 @@ func (l *Linker) linkComponentDir(pluginPath, component string, force bool) (int
 
 	files, err := os.ReadDir(srcDir)
 	if err != nil {
-		return 0, nil, nil
+		// 之前直接 return (0, nil, nil)，把权限错误/IO 错误当成"插件没有这个组件"，
+		// 用户看到 "✓ Successfully installed" 但其实 0 个 skill 被链接。
+		return 0, nil, fmt.Errorf("failed to read plugin %s dir %s: %w", component, srcDir, err)
 	}
 
 	var conflicts []string
@@ -328,17 +326,24 @@ func parseCommandField(raw interface{}) []ComponentPath {
 
 func (l *Linker) RemoveSymlinks(pluginPath string) (int, error) {
 	total := 0
+	var errs []error
 
 	components := []string{"skills", "commands", "agents"}
 	for _, component := range components {
 		n, err := l.unlinkComponentDir(pluginPath, component)
 		if err != nil {
-			fmt.Printf("⚠️  Error removing %s symlinks: %v\n", component, err)
+			// 累积所有 component 的错误，返回聚合后的 error。
+			// 之前的实现把错误 Printf 出去然后吞掉，调用方永远看不到失败，
+			// 导致 plugin remove 后 ~/.agents/skills/<x> 仍可能是野指针。
+			errs = append(errs, fmt.Errorf("%s: %w", component, err))
 			continue
 		}
 		total += n
 	}
 
+	if len(errs) > 0 {
+		return total, fmt.Errorf("failed to remove some symlinks: %v", errs)
+	}
 	return total, nil
 }
 
@@ -350,7 +355,9 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 
 	files, err := os.ReadDir(componentDir)
 	if err != nil {
-		return 0, nil
+		// 之前直接 return (0, nil) 把 ReadDir 错误当成"空目录"，
+		// 这样 plugin remove 看起来成功了，但所有 symlink 都还在。
+		return 0, fmt.Errorf("failed to read %s: %w", componentDir, err)
 	}
 
 	count := 0
@@ -359,6 +366,7 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 		absPluginPath = evaluatedPluginPath
 	}
 
+	var skipped []string
 	for _, file := range files {
 		linkPath := filepath.Join(componentDir, file.Name())
 
@@ -368,6 +376,8 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 
 		linkTarget, err := os.Readlink(linkPath)
 		if err != nil {
+			// 单个 Readlink 失败只跳过这一项，但记录下来上报。
+			skipped = append(skipped, fmt.Sprintf("readlink %s: %v", linkPath, err))
 			continue
 		}
 
@@ -377,6 +387,7 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 		}
 		rel, err := filepath.Rel(absPluginPath, absLinkTarget)
 		if err != nil {
+			skipped = append(skipped, fmt.Sprintf("rel %s: %v", linkPath, err))
 			continue
 		}
 
@@ -385,12 +396,16 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 		}
 
 		if err := os.Remove(linkPath); err != nil {
-			fmt.Printf("⚠️  Failed to remove symlink: %s (%v)\n", linkPath, err)
+			// Remove 失败也要上报，否则会留下野指针。
+			skipped = append(skipped, fmt.Sprintf("remove %s: %v", linkPath, err))
 		} else {
 			count++
 		}
 	}
 
+	if len(skipped) > 0 {
+		return count, fmt.Errorf("some symlinks could not be removed: %v", skipped)
+	}
 	return count, nil
 }
 

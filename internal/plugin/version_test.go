@@ -76,7 +76,7 @@ func TestGetPluginSourcePath(t *testing.T) {
 
 	t.Run("local source", func(t *testing.T) {
 		p := marketplace.Plugin{Source: &marketplace.LocalSource{Path: "./plugins/foo"}}
-		path, err := resolver.GetPluginSourcePath(&p, marketPath)
+		path, err := resolver.GetPluginSourcePathWithCtx(&p, PluginResolutionContext{MarketPath: marketPath})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -88,7 +88,7 @@ func TestGetPluginSourcePath(t *testing.T) {
 
 	t.Run("remote source returns error", func(t *testing.T) {
 		p := marketplace.Plugin{Source: &marketplace.GitHubSource{Repo: "owner/repo"}}
-		_, err := resolver.GetPluginSourcePath(&p, marketPath)
+		_, err := resolver.GetPluginSourcePathWithCtx(&p, PluginResolutionContext{MarketPath: marketPath})
 		if err == nil {
 			t.Fatal("expected error for remote source")
 		}
@@ -96,7 +96,7 @@ func TestGetPluginSourcePath(t *testing.T) {
 
 	t.Run("raw string source returns error", func(t *testing.T) {
 		p := marketplace.Plugin{Source: "./plugins/foo"}
-		_, err := resolver.GetPluginSourcePath(&p, marketPath)
+		_, err := resolver.GetPluginSourcePathWithCtx(&p, PluginResolutionContext{MarketPath: marketPath})
 		if err == nil {
 			t.Fatal("expected error for raw string source")
 		}

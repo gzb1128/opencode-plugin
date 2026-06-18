@@ -2,6 +2,7 @@ package marketplace
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -22,33 +23,6 @@ func NewGitClient() *GitClient {
 	return &GitClient{
 		timeout: 60 * time.Second,
 	}
-}
-
-func (g *GitClient) Clone(url, path string) error {
-	_, err := git.PlainClone(path, false, &git.CloneOptions{
-		URL:               url,
-		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to clone repository: %w", err)
-	}
-
-	return nil
-}
-
-func (g *GitClient) GetLatestCommitSHA(repoPath string) (string, error) {
-	repo, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open repository: %w", err)
-	}
-
-	ref, err := repo.Head()
-	if err != nil {
-		return "", fmt.Errorf("failed to get HEAD: %w", err)
-	}
-
-	return ref.Hash().String(), nil
 }
 
 func (g *GitClient) Checkout(repoPath, ref string) error {
@@ -111,38 +85,9 @@ func (g *GitClient) checkoutRemoteRef(repoPath, ref string) error {
 	return fmt.Errorf("failed to resolve ref %s: %w", ref, lastErr)
 }
 
-func (g *GitClient) Pull(repoPath string) error {
-	repo, err := git.PlainOpen(repoPath)
-	if err != nil {
-		return fmt.Errorf("failed to open repository: %w", err)
-	}
-
-	worktree, err := repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("failed to get worktree: %w", err)
-	}
-
-	if err := worktree.Reset(&git.ResetOptions{Mode: git.HardReset}); err != nil {
-		return fmt.Errorf("failed to reset worktree before pull: %w", err)
-	}
-
-	err = worktree.Pull(&git.PullOptions{
-		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
-	})
-	if err != nil && err != git.NoErrAlreadyUpToDate {
-		return fmt.Errorf("failed to pull: %w", err)
-	}
-
-	return nil
-}
-
 func (g *GitClient) IsGitRepo(path string) bool {
 	_, err := git.PlainOpen(path)
 	return err == nil
-}
-
-func (g *GitClient) CloneOrPull(url, path string) error {
-	return g.CloneOrPullWithOptions(url, path, CloneOptions{})
 }
 
 func (g *GitClient) CloneOrPullWithOptions(url, path string, opts CloneOptions) error {
@@ -162,12 +107,17 @@ func (g *GitClient) CloneOrPullWithOptions(url, path string, opts CloneOptions) 
 		_, err := git.PlainClone(path, false, cloneOpts)
 		if err != nil {
 			if opts.Ref != "" {
+				// 第一次 PlainClone 可能在 path 下残留 .git/，必须先清空再重试，
+				// 否则 go-git 要求目标目录为空，第二次 clone 也会失败。
+				if rmErr := os.RemoveAll(path); rmErr != nil {
+					return fmt.Errorf("failed to clone repository: %w (cleanup of partial clone also failed: %v)", err, rmErr)
+				}
 				_, err2 := git.PlainClone(path, false, &git.CloneOptions{
 					URL:               url,
 					RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
 				})
 				if err2 != nil {
-					return fmt.Errorf("failed to clone repository: %w", err)
+					return fmt.Errorf("failed to clone repository: %w (retry without ref also failed: %v)", err, err2)
 				}
 				if checkoutErr := g.Checkout(path, opts.Ref); checkoutErr != nil {
 					return fmt.Errorf("cloned but failed to checkout ref %s: %w", opts.Ref, checkoutErr)
