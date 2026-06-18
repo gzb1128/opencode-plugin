@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/opencode/plugin-cli/internal/gitutil"
 )
 
 type CloneOptions struct {
@@ -16,12 +16,12 @@ type CloneOptions struct {
 }
 
 type GitClient struct {
-	timeout time.Duration
+	git *gitutil.Client
 }
 
 func NewGitClient() *GitClient {
 	return &GitClient{
-		timeout: 60 * time.Second,
+		git: gitutil.NewClient(gitutil.DefaultOptions()),
 	}
 }
 
@@ -104,20 +104,31 @@ func (g *GitClient) CloneOrPullWithOptions(url, path string, opts CloneOptions) 
 			cloneOpts.ReferenceName = plumbing.ReferenceName(refName)
 		}
 
-		_, err := git.PlainClone(path, false, cloneOpts)
+		err := g.git.CloneWithCleanup(path, func() error {
+			_, err := git.PlainClone(path, false, cloneOpts)
+			return err
+		})
 		if err != nil {
-			if opts.Ref != "" {
+			if opts.Ref != "" && !gitutil.IsTransientError(err) {
 				// 第一次 PlainClone 可能在 path 下残留 .git/，必须先清空再重试，
 				// 否则 go-git 要求目标目录为空，第二次 clone 也会失败。
 				if rmErr := os.RemoveAll(path); rmErr != nil {
 					return fmt.Errorf("failed to clone repository: %w (cleanup of partial clone also failed: %v)", err, rmErr)
 				}
-				_, err2 := git.PlainClone(path, false, &git.CloneOptions{
-					URL:               url,
-					RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
+				// Fallback clone 不带 ref。只有首次 clone 是非 transient 错误时才进入这里；
+				// 网络型错误不会再走 fallback，从而避免 transient 路径 3 次 → 6 次。
+				err2 := g.git.CloneWithCleanup(path, func() error {
+					_, err := git.PlainClone(path, false, &git.CloneOptions{
+						URL:               url,
+						RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
+					})
+					return err
 				})
 				if err2 != nil {
-					return fmt.Errorf("failed to clone repository: %w (retry without ref also failed: %v)", err, err2)
+					if rmErr := os.RemoveAll(path); rmErr != nil {
+						return fmt.Errorf("failed to clone repository: %w (retry without ref failed: %w; cleanup of partial fallback also failed: %v)", err, err2, rmErr)
+					}
+					return fmt.Errorf("failed to clone repository: %w (retry without ref also failed: %w)", err, err2)
 				}
 				if checkoutErr := g.Checkout(path, opts.Ref); checkoutErr != nil {
 					return fmt.Errorf("cloned but failed to checkout ref %s: %w", opts.Ref, checkoutErr)
@@ -157,10 +168,16 @@ func (g *GitClient) CloneOrPullWithOptions(url, path string, opts CloneOptions) 
 		return fmt.Errorf("failed to reset worktree before pull: %w", err)
 	}
 
-	err = worktree.Pull(&git.PullOptions{
-		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
+	err = g.git.Run(func() error {
+		err := worktree.Pull(&git.PullOptions{
+			RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
+		})
+		if err == git.NoErrAlreadyUpToDate {
+			return nil
+		}
+		return err
 	})
-	if err != nil && err != git.NoErrAlreadyUpToDate {
+	if err != nil {
 		return fmt.Errorf("failed to pull: %w", err)
 	}
 
@@ -193,16 +210,30 @@ func (g *GitClient) fetchRef(repo *git.Repository, remoteURL, ref string) error 
 	}
 
 	var fetched bool
-	for _, rs := range refSpecs {
-		err = remote.Fetch(&git.FetchOptions{
-			RefSpecs: []config.RefSpec{rs},
-		})
-		if err == nil || err == git.NoErrAlreadyUpToDate {
-			fetched = true
+	var lastErr error
+	err = g.git.Run(func() error {
+		fetched = false
+		lastErr = nil
+		for _, rs := range refSpecs {
+			err := remote.Fetch(&git.FetchOptions{
+				RefSpecs: []config.RefSpec{rs},
+			})
+			if err == git.NoErrAlreadyUpToDate {
+				err = nil
+			}
+			if err == nil {
+				fetched = true
+				return nil
+			}
+			lastErr = err
 		}
+		return lastErr
+	})
+	if err != nil {
+		lastErr = err
 	}
 	if !fetched {
-		return fmt.Errorf("ref %s not found as branch or tag: %w", ref, err)
+		return fmt.Errorf("ref %s not found as branch or tag: %w", ref, lastErr)
 	}
 	return nil
 }

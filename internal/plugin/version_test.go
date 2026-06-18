@@ -2,11 +2,17 @@ package plugin
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	"github.com/opencode/plugin-cli/internal/gitutil"
 	"github.com/opencode/plugin-cli/internal/marketplace"
 )
 
@@ -148,6 +154,99 @@ func TestCloneRemotePlugin_UnsupportedTypes(t *testing.T) {
 			t.Fatal("expected error for pip source")
 		}
 	})
+}
+
+func TestCloneRemotePlugin_UsesGitHTTPTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = w.Write([]byte("not a git server"))
+	}))
+	t.Cleanup(server.Close)
+
+	resolver := NewVersionResolver()
+	resolver.gitClient = &GitClient{git: gitutil.NewClient(gitutil.Options{Timeout: 20 * time.Millisecond, Attempts: 1})}
+
+	cachePath := filepath.Join(t.TempDir(), "cache")
+	p := marketplace.Plugin{Source: &marketplace.URLSource{URL: server.URL + "/plugin.git"}}
+
+	started := time.Now()
+	err := resolver.CloneRemotePlugin(&p, cachePath)
+	if err == nil {
+		t.Fatal("expected clone timeout")
+	}
+	if elapsed := time.Since(started); elapsed >= 150*time.Millisecond {
+		t.Fatalf("CloneRemotePlugin took %s, want timeout before server responds", elapsed)
+	}
+}
+
+func TestCloneRemotePlugin_SubdirSourceUsesGitHTTPTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+	}))
+	t.Cleanup(server.Close)
+
+	resolver := NewVersionResolver()
+	resolver.gitClient = &GitClient{git: gitutil.NewClient(gitutil.Options{Timeout: 20 * time.Millisecond, Attempts: 1})}
+
+	cachePath := filepath.Join(t.TempDir(), "cache")
+	p := marketplace.Plugin{Source: &marketplace.GitSubdirSource{URL: server.URL + "/plugin.git", SubPath: "skills"}}
+
+	started := time.Now()
+	err := resolver.CloneRemotePlugin(&p, cachePath)
+	if err == nil {
+		t.Fatal("expected clone timeout")
+	}
+	if elapsed := time.Since(started); elapsed >= 150*time.Millisecond {
+		t.Fatalf("CloneRemotePlugin subdir took %s, want timeout before server responds", elapsed)
+	}
+}
+
+func TestSyncGitSource_UsesGitHTTPTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: go-git file transport depends on system git version compatibility")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+	}))
+	t.Cleanup(server.Close)
+
+	// 在 cachePath 创建一个健康的 git repo，origin 指向慢服务器。
+	// cloneGitSource 检测到健康 cache → syncGitSource → fetch 慢服务器 → 超时。
+	cacheBase := t.TempDir()
+	cachePath := filepath.Join(cacheBase, "cache")
+	repo, err := git.PlainInit(cachePath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, _ := repo.Worktree()
+	if err := os.WriteFile(filepath.Join(cachePath, "f.txt"), []byte("v1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add("f.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Commit("init", &git.CommitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{server.URL + "/repo.git"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := &VersionResolver{
+		gitClient: &GitClient{git: gitutil.NewClient(gitutil.Options{Timeout: 20 * time.Millisecond, Attempts: 1})},
+	}
+
+	started := time.Now()
+	err = resolver.cloneGitSource(server.URL+"/repo.git", "", "", cachePath)
+	if err == nil {
+		t.Fatal("expected fetch timeout")
+	}
+	if elapsed := time.Since(started); elapsed >= 150*time.Millisecond {
+		t.Fatalf("syncGitSource took %s, want timeout before server responds", elapsed)
+	}
 }
 
 func TestCopyRecursive(t *testing.T) {
