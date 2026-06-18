@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/opencode/plugin-cli/internal/gitutil"
 	"github.com/opencode/plugin-cli/internal/marketplace"
 	"github.com/opencode/plugin-cli/internal/pathutil"
 )
@@ -28,7 +29,9 @@ type VersionResolver struct {
 	npmRunner NPMRunner
 }
 
-type GitClient struct{}
+type GitClient struct {
+	git *gitutil.Client
+}
 
 type productionNPMRunner struct{}
 
@@ -45,8 +48,14 @@ func (r *productionNPMRunner) Install(packageSpec, prefix, registry string) erro
 
 func NewVersionResolver() *VersionResolver {
 	return &VersionResolver{
-		gitClient: &GitClient{},
+		gitClient: newGitClient(),
 		npmRunner: &productionNPMRunner{},
+	}
+}
+
+func newGitClient() *GitClient {
+	return &GitClient{
+		git: gitutil.NewClient(gitutil.DefaultOptions()),
 	}
 }
 
@@ -299,8 +308,11 @@ func (v *VersionResolver) cloneGitSource(gitURL, ref, sha, cachePath string) err
 	// superpowers 的 evals 子模块），go-git 内置 SSH 客户端拿不到 ssh-agent
 	// 密钥时会握手失败，导致整个 plugin clone 失败。Plugin 运行时几乎不需要
 	// submodule 内容（通常是 evals / tests），所以默认不递归。
-	_, err := git.PlainClone(cachePath, false, &git.CloneOptions{
-		URL: gitURL,
+	err := v.gitClient.git.CloneWithCleanup(cachePath, func() error {
+		_, err := git.PlainClone(cachePath, false, &git.CloneOptions{
+			URL: gitURL,
+		})
+		return err
 	})
 	if err != nil {
 		os.RemoveAll(cachePath)
@@ -364,7 +376,13 @@ func (v *VersionResolver) syncGitSource(gitURL, ref, sha, cachePath string) erro
 		return fmt.Errorf("cached origin URL %s does not match requested %s (marketplace source changed?)", urls[0], gitURL)
 	}
 
-	if err := remote.Fetch(&git.FetchOptions{Tags: git.AllTags}); err != nil && err != git.NoErrAlreadyUpToDate {
+	if err := v.gitClient.git.Run(func() error {
+		err := remote.Fetch(&git.FetchOptions{Tags: git.AllTags})
+		if err == git.NoErrAlreadyUpToDate {
+			return nil
+		}
+		return err
+	}); err != nil {
 		return fmt.Errorf("failed to fetch: %w", err)
 	}
 
@@ -375,7 +393,13 @@ func (v *VersionResolver) syncGitSource(gitURL, ref, sha, cachePath string) erro
 	if ref != "" {
 		return checkoutRef(cachePath, ref)
 	}
-	if err := wt.Pull(&git.PullOptions{}); err != nil && err != git.NoErrAlreadyUpToDate {
+	if err := v.gitClient.git.Run(func() error {
+		err := wt.Pull(&git.PullOptions{})
+		if err == git.NoErrAlreadyUpToDate {
+			return nil
+		}
+		return err
+	}); err != nil {
 		return fmt.Errorf("failed to pull: %w", err)
 	}
 	return nil
@@ -395,8 +419,11 @@ func (v *VersionResolver) cloneGitSubdirSource(src *marketplace.GitSubdirSource,
 	defer os.RemoveAll(tempDir)
 
 	// 同 cloneGitSource，不递归 submodule（见上注释）
-	_, err = git.PlainClone(tempDir, false, &git.CloneOptions{
-		URL: gitURL,
+	err = v.gitClient.git.CloneWithCleanup(tempDir, func() error {
+		_, err := git.PlainClone(tempDir, false, &git.CloneOptions{
+			URL: gitURL,
+		})
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
