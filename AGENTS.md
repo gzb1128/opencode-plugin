@@ -29,22 +29,33 @@ opencode-plugin 是一个 **Claude Code 插件生态兼容层**。它的核心�
 
 ## 关键隐式知识
 
-### Plugin Source 的两种模式
+### Plugin Source 的类型与 update 行为
 
-Marketplace 中的 plugin 有两种 source 类型，直接影响 `plugin update` 行为：
+marketplace.json 中每个 plugin 的 `source` 字段决定 `plugin update` 从哪里取代码。
+`parsePluginSource`（`internal/marketplace/parser.go`）支持 7 种类型，按行为分成两组：
 
-**Local Source（相对路径）** — plugin 代码在 marketplace 仓库内
+**Local Source（相对路径字符串）** — plugin 代码在 marketplace 仓库内
 ```json
 { "source": "./plugins/my-plugin" }
 ```
-- `plugin update` 从 **marketplace 缓存目录** 读取
+- `plugin update` 从 **marketplace 缓存目录** 读取（即 `market update` 克隆下来的那份）
 - **必须先 `market update` 再 `plugin update`**，否则拿到旧代码
 
-**Remote Source（远程对象）** — plugin 代码在独立仓库
+**Remote Source（对象形式）** — plugin 代码在独立仓库/包，不依赖 marketplace 缓存
 ```json
 { "source": { "source": "github", "repo": "owner/my-plugin" } }
 ```
-- `plugin update` 直接 clone 远程仓库，不依赖 marketplace 缓存
+取代码的方式由 `source` 字段决定（见 `internal/plugin/version.go` 的 `IsRemoteSource` /
+`clonePluginSource`）：
+
+| `source` 值 | 必填字段 | 取代码方式 |
+|-------------|---------|-----------|
+| `github`     | `repo`            | git clone `https://github.com/<repo>.git` |
+| `git`        | `url`             | git clone `<url>` |
+| `git-subdir` | `url`/`repo`+`path`| git clone 后取子目录 |
+| `url`        | `url`             | 当作 git 仓库 clone（同 `git`，**非**任意 URL 下载） |
+| `npm`        | `package`         | `npm install` |
+| `pip`        | `package`         | ⚠️ 解析已支持，**安装尚未实现**（`version.go:186` 返回 not implemented） |
 
 ### 强制覆盖：--force / -f
 
