@@ -3,7 +3,6 @@ package plugin
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,11 +105,6 @@ func (g *GitClient) GetCommitSHA(path string) (string, error) {
 	}
 
 	return ref.Hash().String(), nil
-}
-
-func (v *VersionResolver) GetPluginSourcePath(plugin *marketplace.Plugin, marketPath string) (string, error) {
-	ctx := PluginResolutionContext{MarketPath: marketPath, PluginRoot: ""}
-	return v.GetPluginSourcePathWithCtx(plugin, ctx)
 }
 
 func (v *VersionResolver) GetPluginSourcePathWithCtx(plugin *marketplace.Plugin, ctx PluginResolutionContext) (string, error) {
@@ -280,7 +274,20 @@ func extractPackageNameFromSpec(spec string) string {
 }
 
 func (v *VersionResolver) cloneGitSource(gitURL, ref, sha, cachePath string) error {
+	// 如果 cache 已经是健康的 git repo，用 fetch + hard reset 更新工作树，
+	// 而不是 wipe + 重新 clone。这对 superpowers 这种大仓库（10-30MB）
+	// 能省掉完整的网络下载和磁盘写入——只在 fetch 增量对象 + reset 工作树。
+	// 失败时回退到原本的 fresh clone 路径，保证行为兼容。
 	if _, err := os.Stat(cachePath); err == nil {
+		if isRepoHealthy(cachePath) {
+			if syncErr := v.syncGitSource(gitURL, ref, sha, cachePath); syncErr == nil {
+				return nil
+			} else {
+				// sync 失败信息走 stderr，让只捕获 stderr 的 CI 也能看到回退原因。
+				fmt.Fprintf(os.Stderr, "  cache sync failed (%v), falling back to fresh clone\n", syncErr)
+			}
+		}
+		// 不健康或 sync 失败：清掉重 clone
 		os.RemoveAll(cachePath)
 	}
 
@@ -320,6 +327,57 @@ func (v *VersionResolver) cloneGitSource(gitURL, ref, sha, cachePath string) err
 		}
 	}
 
+	return nil
+}
+
+// syncGitSource 在已有的 cache 目录上做 fetch + hard reset，而不是 fresh clone。
+// 前提：cachePath 已存在且 isRepoHealthy(cachePath) == true。
+func (v *VersionResolver) syncGitSource(gitURL, ref, sha, cachePath string) error {
+	repo, err := git.PlainOpen(cachePath)
+	if err != nil {
+		return fmt.Errorf("failed to open existing cache: %w", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	// 先 hard reset 清掉任何本地改动（cache 应是只读源，不应有改动，但兜底）。
+	if err := wt.Reset(&git.ResetOptions{Mode: git.HardReset}); err != nil {
+		return fmt.Errorf("failed to reset worktree: %w", err)
+	}
+
+	// fetch 所有 tags 和分支的增量对象。
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return fmt.Errorf("failed to find origin remote: %w", err)
+	}
+
+	// 校验缓存的 remote URL 还是我们想要的 URL。
+	// 如果 marketplace 的 source.github.repo 变了（plugin 搬家 / 镜像切换），
+	// 缓存里的 origin 仍指向旧 URL——fetch 会"成功"但拉到的是旧内容。
+	// 这里返回 error 让外层回退到 fresh clone。
+	if urls := remote.Config().URLs; len(urls) == 0 {
+		return fmt.Errorf("cached repo has no origin URL configured")
+	} else if !matchingGitURL(urls[0], gitURL) {
+		return fmt.Errorf("cached origin URL %s does not match requested %s (marketplace source changed?)", urls[0], gitURL)
+	}
+
+	if err := remote.Fetch(&git.FetchOptions{Tags: git.AllTags}); err != nil && err != git.NoErrAlreadyUpToDate {
+		return fmt.Errorf("failed to fetch: %w", err)
+	}
+
+	// checkout 到指定 sha/ref 或 pull 当前分支最新。
+	if sha != "" {
+		return checkoutSHA(cachePath, sha)
+	}
+	if ref != "" {
+		return checkoutRef(cachePath, ref)
+	}
+	if err := wt.Pull(&git.PullOptions{}); err != nil && err != git.NoErrAlreadyUpToDate {
+		return fmt.Errorf("failed to pull: %w", err)
+	}
 	return nil
 }
 
@@ -408,56 +466,24 @@ func checkoutRef(repoPath, ref string) error {
 	return fmt.Errorf("failed to checkout ref %s: not found as branch (%v) or tag (%v)", ref, branchErr, tagErr)
 }
 
+// copyRecursive 是 copyDirTree(src, dst, skipGit) 的薄包装。
+// 之前版本里有一个独立的 ~50 行递归拷贝实现，功能和 installer.go 的
+// copyDirTree 几乎完全重复（都跳过 .git、跳过 symlink、保留 mode）。
+// 统一到一个实现减少维护成本，并复用 copyFilePreserveMode 对 Close 错误的检查。
 func copyRecursive(src, dst string) error {
-	if err := os.MkdirAll(dst, 0755); err != nil {
-		return err
+	return copyDirTree(src, dst, map[string]bool{".git": true})
+}
+
+// matchingGitURL 判断两个 git URL 是否等价。
+// 规范化差异：trailing .git（github.com/foo/bar.git vs github.com/foo/bar）。
+// 严格的字符串比较就足够——不会出现 https vs ssh 混用，因为 cloneGitSource
+// 始终构造 https URL。
+func matchingGitURL(a, b string) bool {
+	normalize := func(s string) string {
+		s = strings.TrimSuffix(s, ".git")
+		return s
 	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		if entry.Name() == ".git" {
-			continue
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("failed to stat %s: %w", entry.Name(), err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if info.IsDir() {
-			if err := copyRecursive(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			in, err := os.Open(srcPath)
-			if err != nil {
-				return err
-			}
-			out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-			if err != nil {
-				in.Close()
-				return err
-			}
-			_, err = io.Copy(out, in)
-			in.Close()
-			out.Close()
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+	return normalize(a) == normalize(b)
 }
 
 func (v *VersionResolver) GetAvailableVersions(pluginPath string) ([]string, error) {

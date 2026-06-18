@@ -47,14 +47,20 @@ Examples:
 			// Update all marketplaces
 			fmt.Printf("Updating all marketplaces (%d)...\n\n", len(markets))
 			updated := 0
+			failed := 0
 			for name := range markets {
 				if err := updateMarket(mgr, configMgr, name, markets); err != nil {
 					fmt.Fprintf(os.Stderr, "Error updating %s: %v\n\n", name, err)
+					failed++
 				} else {
 					updated++
 				}
 			}
 			fmt.Printf("\n✓ Updated %d/%d marketplaces\n", updated, len(markets))
+			// 部分失败时必须非零退出，否则 CI / cron / 脚本无法检测到 update 实际上没成功。
+			if failed > 0 {
+				os.Exit(1)
+			}
 		} else {
 			// Update specific marketplace
 			name := args[0]
@@ -165,34 +171,6 @@ func cleanupDeletedPlugins(configMgr *config.Manager, marketName string, oldInde
 	}
 
 	return nil
-}
-
-func getMarketURL(market map[string]interface{}) string {
-	source, _ := market["source"].(string)
-	switch source {
-	case "github":
-		if repo, ok := market["repo"].(string); ok && repo != "" {
-			return repo
-		}
-		if url, ok := market["url"].(string); ok && url != "" {
-			return url
-		}
-	case "file", "directory", "local":
-		if path, ok := market["path"].(string); ok && path != "" {
-			return path
-		}
-	default:
-		if url, ok := market["url"].(string); ok && url != "" {
-			return url
-		}
-		if repo, ok := market["repo"].(string); ok && repo != "" {
-			return repo
-		}
-		if path, ok := market["path"].(string); ok && path != "" {
-			return path
-		}
-	}
-	return ""
 }
 
 func preserveConfigFields(orig, cfg map[string]interface{}) {

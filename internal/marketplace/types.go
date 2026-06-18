@@ -355,17 +355,6 @@ func GetMarketSourceRef(ms MarketSource) string {
 	}
 }
 
-func GetMarketSourceSparsePaths(ms MarketSource) []string {
-	switch s := ms.(type) {
-	case *GitHubMarketSource:
-		return s.SparsePaths
-	case *GitMarketSource:
-		return s.SparsePaths
-	default:
-		return nil
-	}
-}
-
 func configStringSlice(raw interface{}) []string {
 	switch v := raw.(type) {
 	case []string:

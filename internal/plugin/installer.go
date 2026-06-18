@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -134,7 +135,13 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 
 	var manifest map[string]interface{}
 	if mat.ManifestPath != "" {
-		manifest, _ = opencode.ReadManifest(mat.ManifestPath)
+		manifest, err = opencode.ReadManifest(mat.ManifestPath)
+		if err != nil {
+			// 之前直接 `manifest, _ = ...` 吞掉错误，结果 manifest 为 nil，
+			// 后续 CreateSymlinksFromManifest 走"没有 manifest 字段"分支，
+			// 用户看到 "✓ Successfully installed" 但其实 0 个 skill 被链接。
+			return fmt.Errorf("failed to read plugin manifest %s: %w", mat.ManifestPath, err)
+		}
 	}
 
 	key := fmt.Sprintf("%s@%s", resolved.Plugin.Name, opts.MarketName)
@@ -161,12 +168,15 @@ func (i *Installer) installOneResolvedPlugin(resolved *marketplace.ResolvedPlugi
 
 	counts, err := i.linker.CreateSymlinksFromManifest(mat.Path, manifest, opts.Force)
 	if err != nil {
-		fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", err)
+		// symlink 失败说明 ~/.agents/ 有权限/IO 问题。不写安装记录，
+		// 让用户能修复环境后重跑 plugin install。
+		return fmt.Errorf("failed to create symlinks: %w", err)
 	}
 
 	mcpCount, err := i.installMCP(mat.Path, resolved.Plugin.Name, opts.MarketName)
 	if err != nil {
-		fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
+		// MCP 安装失败同样不能静默——否则用户以为 plugin 装好了但其实 MCP 没生效。
+		return fmt.Errorf("failed to install MCP servers: %w", err)
 	}
 
 	record := &config.InstallRecord{
@@ -284,26 +294,8 @@ func (i *Installer) installMCP(pluginPath, pluginName, marketName string) (int, 
 	return len(servers), nil
 }
 
-func (i *Installer) findPlugin(markets map[string]map[string]interface{}, pluginName, marketName string) (*marketplace.Plugin, marketplace.MarketSource, string, error) {
-	marketSources := make(map[string]marketplace.MarketSource)
-	for name, src := range markets {
-		marketSources[name] = marketplace.NewMarketSourceFromConfig(src)
-	}
-
-	plugin, ms, foundMarketName, err := i.marketMgr.FindPlugin(marketSources, pluginName, marketName)
-	if err != nil {
-		return nil, nil, "", err
-	}
-
-	return plugin, ms, foundMarketName, nil
-}
-
 func (i *Installer) copyPluginToCache(src, dst string) error {
 	return copyDirTree(src, dst, map[string]bool{".git": true})
-}
-
-func (i *Installer) copyDir(src, dst string) error {
-	return copyDirTree(src, dst, nil)
 }
 
 func copyDirTree(src, dst string, skip map[string]bool) error {
@@ -353,16 +345,21 @@ func copyFilePreserveMode(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
+	// io.Copy 的写入错误可能延迟到 Close 时才上报（disk full / NFS），
+	// 必须显式检查 Close，否则会得到被截断的文件但函数仍返回 nil。
 	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close() // 主动放弃 fd；Close 错误不重要因为我们要返回更早的 io.Copy 错误
 		return err
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("failed to flush %s: %w", dst, err)
 	}
 	return nil
 }
@@ -590,7 +587,7 @@ func (i *Installer) Update(pluginName string, opts InstallOptions) error {
 			backupPath = oldCachePath + ".update-backup"
 			// 如果上一次失败的 update 残留了 backup，先清掉
 			if _, leftoverErr := os.Stat(backupPath); leftoverErr == nil {
-				os.RemoveAll(backupPath)
+				_ = os.RemoveAll(backupPath) // best-effort：失败的话下面的 Rename 会给出明确错误
 			}
 			if err := os.Rename(oldCachePath, backupPath); err != nil {
 				return fmt.Errorf("failed to back up existing cache before update: %w", err)
@@ -612,12 +609,19 @@ func (i *Installer) Update(pluginName string, opts InstallOptions) error {
 		return fmt.Errorf("failed to materialize new version: %w", err)
 	}
 
-	// materialize 成功后，无论后续步骤是否成功，backup 都可以清理了——新 cache 已经
-	// 落盘，旧的不再被引用。用 defer 兜底，避免遗漏。
+	// materialize 成功后，新 cache 已落盘，旧 backup 可以清理。
+	// 但必须等 Stage 2 全部成功才能清——Stage 2 失败时留下 backup 用于手工恢复。
+	// 之前用 defer 立即注册清理，会在 Stage 2 失败路径上把 backup 也删掉，
+	// 同时 Stage 2 已经删了旧 symlinks / MCP，结果用户什么都没了。
+	stage2Success := false
 	if backupPath != "" {
 		defer func() {
-			if rmErr := os.RemoveAll(backupPath); rmErr != nil {
-				fmt.Printf("⚠️  Warning: failed to clean up update backup %s: %v\n", backupPath, rmErr)
+			if stage2Success {
+				if rmErr := os.RemoveAll(backupPath); rmErr != nil {
+					fmt.Printf("⚠️  Warning: failed to clean up update backup %s: %v\n", backupPath, rmErr)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "⚠️  Update failed after Stage 1; backup left at %s for manual recovery\n", backupPath)
 			}
 		}()
 	}
@@ -625,19 +629,26 @@ func (i *Installer) Update(pluginName string, opts InstallOptions) error {
 	// 读取新 manifest，用于后续 symlink 创建
 	var manifest map[string]interface{}
 	if mat.ManifestPath != "" {
-		manifest, _ = opencode.ReadManifest(mat.ManifestPath)
+		manifest, err = opencode.ReadManifest(mat.ManifestPath)
+		if err != nil {
+			// 之前用 `manifest, _ =` 吞掉，导致 CreateSymlinksFromManifest 走"无 manifest"
+			// 分支按目录扫描，可能链接错文件。Stage 2 失败时按设计保留 backup。
+			return fmt.Errorf("failed to read new plugin manifest %s: %w", mat.ManifestPath, err)
+		}
 	}
 
 	// ===== Stage 2: Swap（删旧 side-effects，建立新 side-effects）=====
+	// Stage 2 的所有错误都必须传播出去，不能像之前那样 Printf 成 warning。
+	// 任意一步失败都不写新的 install record，让 record 仍然指向旧版本（便于诊断）。
 	// 2a. 删旧 symlinks / MCP。这些指向 OLD 路径；即使新旧路径相同，文件集合也可能变化。
 	//     用 oldCachePathResolved（已 EvalSymlinks）确保和 symlink target 词法一致。
 	if oldCachePathResolved != "" {
 		if _, err := i.linker.RemoveSymlinks(oldCachePathResolved); err != nil {
-			fmt.Printf("⚠️  Warning: failed to remove old symlinks: %v\n", err)
+			return fmt.Errorf("failed to remove old symlinks: %w", err)
 		}
 	}
 	if err := i.mcpManager.UninstallMCPConfig(resolved.Plugin.Name); err != nil {
-		fmt.Printf("⚠️  Warning: failed to remove old MCP config: %v\n", err)
+		return fmt.Errorf("failed to remove old MCP config: %w", err)
 	}
 
 	// 2b. 建立新 state（disabled 模式下只写 record，不建 symlinks / MCP）
@@ -646,13 +657,14 @@ func (i *Installer) Update(pluginName string, opts InstallOptions) error {
 	if !opts.Disabled {
 		countsPtr, linkErr := i.linker.CreateSymlinksFromManifest(mat.Path, manifest, opts.Force)
 		if linkErr != nil {
-			fmt.Printf("⚠️  Warning: Failed to create symlinks: %v\n", linkErr)
-		} else if countsPtr != nil {
+			return fmt.Errorf("failed to create new symlinks: %w", linkErr)
+		}
+		if countsPtr != nil {
 			counts = *countsPtr
 		}
 		mcpCount, err = i.installMCP(mat.Path, resolved.Plugin.Name, opts.MarketName)
 		if err != nil {
-			fmt.Printf("⚠️  Warning: Failed to install MCP servers: %v\n", err)
+			return fmt.Errorf("failed to install new MCP servers: %w", err)
 		}
 	}
 
@@ -669,6 +681,7 @@ func (i *Installer) Update(pluginName string, opts InstallOptions) error {
 	if err := i.configMgr.AddInstallRecord(key, record); err != nil {
 		return fmt.Errorf("failed to record updated installation: %w", err)
 	}
+	stage2Success = true
 
 	// ===== Stage 3: Cleanup 历史版本 cache =====
 	// 新旧路径不同时，旧路径还在（不在 backup 里就是没被 rename），删掉。
@@ -726,23 +739,38 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 		return fmt.Errorf("refusing to remove path %q outside cache directory %q", installPath, cacheDir)
 	}
 
-	count, err := i.linker.RemoveSymlinks(installPath)
-	if err != nil {
-		fmt.Printf("⚠️  Error removing symlinks: %v\n", err)
+	count, symlinkErr := i.linker.RemoveSymlinks(installPath)
+	if symlinkErr != nil {
+		// 之前直接 Printf 成 warning 然后继续，导致 plugin remove 看起来成功
+		// 但 ~/.agents/skills/<x> 还是指向已删除的 cache（野指针）。
+		// 累积所有错误，最终一起返回。
+		fmt.Fprintf(os.Stderr, "⚠️  Error removing symlinks: %v\n", symlinkErr)
 	}
 
 	if err := i.mcpManager.UninstallMCPConfig(pluginName); err != nil {
-		fmt.Printf("⚠️  Warning: Failed to uninstall MCP servers: %v\n", err)
+		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to uninstall MCP servers: %v\n", err)
+		symlinkErr = errors.Join(symlinkErr, fmt.Errorf("uninstall MCP: %w", err))
 	}
 
 	if err := os.RemoveAll(installPath); err != nil {
-		fmt.Printf("⚠️  Failed to remove cache: %v\n", err)
+		fmt.Fprintf(os.Stderr, "⚠️  Failed to remove cache: %v\n", err)
+		symlinkErr = errors.Join(symlinkErr, fmt.Errorf("remove cache: %w", err))
 	} else {
 		fmt.Printf("✓ Removed cache: %s\n", installPath)
 	}
 
+	// 始终移除 install record——这样 plugin remove 命令本身总是"成功登记"，
+	// 不会因为 cleanup 失败让 record 留在原处导致后续 plugin list 还显示它。
+	// 注意：如果上面 cleanup 真的失败，剩下的 symlinks/MCP/cache 残留需要用户
+	// 手工清理（再次 plugin remove 找不到 record，会直接报 not installed）。
+	// 把 cleanup 错误作为返回值让 CLI 非零退出，用户能看到提示。
 	if err := i.configMgr.RemoveInstallRecord(key); err != nil {
 		return fmt.Errorf("failed to remove installation record: %w", err)
+	}
+
+	if symlinkErr != nil {
+		fmt.Printf("✓ Removed install record for plugin: %s (%d symlinks removed; see warnings above for cleanup failures)\n", pluginName, count)
+		return fmt.Errorf("plugin %s removed but some cleanup steps failed: %w", pluginName, symlinkErr)
 	}
 
 	fmt.Printf("✓ Successfully removed plugin: %s (%d symlinks removed)\n", pluginName, count)
@@ -810,7 +838,12 @@ func (i *Installer) Enable(pluginName, marketName string, force bool) error {
 	manifestPath := filepath.Join(installPath, ".claude-plugin", "plugin.json")
 	var manifest map[string]interface{}
 	if _, err := os.Stat(manifestPath); err == nil {
-		manifest, _ = opencode.ReadManifest(manifestPath)
+		manifest, err = opencode.ReadManifest(manifestPath)
+		if err != nil {
+			// 之前用 `manifest, _ =` 吞掉，结果 manifest 为 nil，
+			// CreateSymlinksFromManifest 走目录扫描，可能链接错文件或漏链接。
+			return fmt.Errorf("failed to read plugin manifest %s: %w", manifestPath, err)
+		}
 	}
 
 	counts, err := i.linker.CreateSymlinksFromManifest(installPath, manifest, force)
@@ -849,8 +882,10 @@ func (i *Installer) reinstallMCPIfNeeded(installPath, pluginName, marketName str
 
 	servers, err := i.mcpManager.GetMCPServers(installPath)
 	if err != nil {
-		fmt.Printf("Warning: failed to read MCP config from cache: %v\n", err)
-		return nil
+		// 之前这里 `fmt.Printf("Warning ...")` + `return nil` 把错误吞掉。
+		// 结果 Enable 看起来成功了，但 plugin 的 MCP server 实际没装回 opencode.json，
+		// 用户以为 plugin 已启用但 MCP 是失效的。
+		return fmt.Errorf("failed to read MCP config from cache: %w", err)
 	}
 	if len(servers) == 0 {
 		return nil
@@ -958,48 +993,10 @@ func (i *Installer) CleanupOldVersions(currentInstallPath string) error {
 	return nil
 }
 
+// isWithinDir 委托到 pathutil.IsWithinDir——之前这里和 marketplace 包各有一份
+// 近乎相同的实现，已经统一到 pathutil.IsWithinDir 维护一份语义。
 func isWithinDir(path, base string) bool {
-	absPath, err := filepath.Abs(filepath.Clean(path))
-	if err != nil {
-		return false
-	}
-	absBase, err := filepath.Abs(filepath.Clean(base))
-	if err != nil {
-		return false
-	}
-	sep := string(filepath.Separator)
-	if !strings.HasPrefix(absPath, absBase+sep) {
-		return false
-	}
-	evalBase, err := filepath.EvalSymlinks(absBase)
-	if err != nil {
-		return false
-	}
-	evalPath, err := filepath.EvalSymlinks(absPath)
-	if err == nil {
-		return strings.HasPrefix(evalPath, evalBase+sep)
-	}
-	if !os.IsNotExist(err) {
-		return false
-	}
-	dir := absPath
-	for len(dir) > len(absBase) {
-		dir = filepath.Dir(dir)
-		info, err := os.Lstat(dir)
-		if err != nil {
-			continue
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := filepath.EvalSymlinks(dir)
-			if err != nil {
-				return false
-			}
-			if !strings.HasPrefix(target, evalBase+sep) {
-				return false
-			}
-		}
-	}
-	return true
+	return pathutil.IsWithinDir(path, base)
 }
 
 func isRepoHealthy(path string) bool {

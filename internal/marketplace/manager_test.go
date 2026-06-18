@@ -643,23 +643,6 @@ func TestGetMarketSourceRef(t *testing.T) {
 	})
 }
 
-func TestGetMarketSourceSparsePaths(t *testing.T) {
-	t.Run("Git with sparsePaths", func(t *testing.T) {
-		src := &GitMarketSource{SparsePaths: []string{"a", "b"}}
-		got := GetMarketSourceSparsePaths(src)
-		if len(got) != 2 || got[0] != "a" || got[1] != "b" {
-			t.Errorf("got %v, want [a b]", got)
-		}
-	})
-	t.Run("Git without sparsePaths", func(t *testing.T) {
-		src := &GitMarketSource{}
-		got := GetMarketSourceSparsePaths(src)
-		if got != nil {
-			t.Errorf("got %v, want nil", got)
-		}
-	})
-}
-
 func TestIsWithinMarketsDir(t *testing.T) {
 	marketsDir := t.TempDir()
 	innerDir := filepath.Join(marketsDir, "inner")

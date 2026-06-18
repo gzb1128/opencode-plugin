@@ -165,23 +165,21 @@ func (m *Manager) InstallMCPConfig(pluginPath, pluginName, marketName string) er
 		}
 	}
 
-	opencodeConfig, err := m.readOpenCodeConfig()
-	if err != nil {
-		return err
-	}
-
-	if opencodeConfig.MCP == nil {
-		opencodeConfig.MCP = make(map[string]OpenCodeMCPServer)
-	}
-
-	for serverName, server := range servers {
-		fullName := fmt.Sprintf("%s.%s", pluginName, serverName)
-
-		server = m.substituteVariables(server, pluginPath, pluginName, pluginVersion, pluginDataDir)
-		opencodeConfig.MCP[fullName] = m.toOpenCodeServer(server)
-	}
-
-	return m.writeOpenCodeConfig(opencodeConfig)
+	// 通过 json.RawMessage round-trip 写入，保留 opencode.json 里所有 server
+	// 的未知字段（用户手写的 disabledReason / tools / 自定义 transport 字段等）。
+	// 旧的 typed struct 写法会把不在 OpenCodeMCPServer 里的字段全部删掉。
+	return m.mutateMCPRaw(func(mcp map[string]json.RawMessage) (bool, error) {
+		for serverName, server := range servers {
+			fullName := fmt.Sprintf("%s.%s", pluginName, serverName)
+			server = m.substituteVariables(server, pluginPath, pluginName, pluginVersion, pluginDataDir)
+			data, err := json.Marshal(m.toOpenCodeServer(server))
+			if err != nil {
+				return false, fmt.Errorf("failed to marshal mcp server %s: %w", fullName, err)
+			}
+			mcp[fullName] = data
+		}
+		return true, nil
+	})
 }
 
 func (m *Manager) InstallMissingMCPConfig(pluginPath, pluginName, marketName string, servers map[string]MCPServer) error {
@@ -205,63 +203,24 @@ func (m *Manager) InstallMissingMCPConfig(pluginPath, pluginName, marketName str
 		}
 	}
 
-	configPath := m.opencodeConfigPath()
-	fullConfig := make(map[string]json.RawMessage)
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
+	return m.mutateMCPRaw(func(mcp map[string]json.RawMessage) (bool, error) {
+		changed := false
+		for serverName, server := range servers {
+			fullName := fmt.Sprintf("%s.%s", pluginName, serverName)
+			if _, ok := mcp[fullName]; ok {
+				continue
+			}
+
+			server = m.substituteVariables(server, pluginPath, pluginName, pluginVersion, pluginDataDir)
+			data, err := json.Marshal(m.toOpenCodeServer(server))
+			if err != nil {
+				return false, fmt.Errorf("failed to marshal mcp server %s: %w", fullName, err)
+			}
+			mcp[fullName] = data
+			changed = true
 		}
-	} else if err := json.Unmarshal(data, &fullConfig); err != nil {
-		return fmt.Errorf("failed to parse opencode.json: %w", err)
-	}
-
-	mcpConfig := make(map[string]json.RawMessage)
-	if rawMCP, ok := fullConfig["mcp"]; ok {
-		if err := json.Unmarshal(rawMCP, &mcpConfig); err != nil {
-			return fmt.Errorf("failed to parse mcp config: %w", err)
-		}
-		if mcpConfig == nil {
-			mcpConfig = make(map[string]json.RawMessage)
-		}
-	}
-
-	changed := false
-	for serverName, server := range servers {
-		fullName := fmt.Sprintf("%s.%s", pluginName, serverName)
-		if _, ok := mcpConfig[fullName]; ok {
-			continue
-		}
-
-		server = m.substituteVariables(server, pluginPath, pluginName, pluginVersion, pluginDataDir)
-		data, err := json.Marshal(m.toOpenCodeServer(server))
-		if err != nil {
-			return fmt.Errorf("failed to marshal mcp server %s: %w", fullName, err)
-		}
-		mcpConfig[fullName] = data
-		changed = true
-	}
-
-	if !changed {
-		return nil
-	}
-
-	mcpData, err := json.Marshal(mcpConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal mcp config: %w", err)
-	}
-	fullConfig["mcp"] = mcpData
-
-	output, err := json.MarshalIndent(fullConfig, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal opencode.json: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	return os.WriteFile(configPath, append(output, '\n'), 0644)
+		return changed, nil
+	})
 }
 
 func usesPluginData(servers map[string]MCPServer) bool {
@@ -284,26 +243,17 @@ func usesPluginData(servers map[string]MCPServer) bool {
 }
 
 func (m *Manager) UninstallMCPConfig(pluginName string) error {
-	opencodeConfig, err := m.readOpenCodeConfig()
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	if opencodeConfig.MCP == nil {
-		return nil
-	}
-
 	prefix := fmt.Sprintf("%s.", pluginName)
-	for name := range opencodeConfig.MCP {
-		if strings.HasPrefix(name, prefix) {
-			delete(opencodeConfig.MCP, name)
+	return m.mutateMCPRaw(func(mcp map[string]json.RawMessage) (bool, error) {
+		changed := false
+		for name := range mcp {
+			if strings.HasPrefix(name, prefix) {
+				delete(mcp, name)
+				changed = true
+			}
 		}
-	}
-
-	return m.writeOpenCodeConfig(opencodeConfig)
+		return changed, nil
+	})
 }
 
 func (m *Manager) DisableMCPConfig(pluginName string) error {
@@ -315,85 +265,43 @@ func (m *Manager) EnableMCPConfig(pluginName string) error {
 }
 
 func (m *Manager) setMCPEnabled(pluginName string, enabled bool) error {
-	configPath := m.opencodeConfigPath()
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	var fullConfig map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fullConfig); err != nil {
-		return fmt.Errorf("failed to parse opencode.json: %w", err)
-	}
-
-	rawMCP, ok := fullConfig["mcp"]
-	if !ok {
-		return nil
-	}
-
-	var mcp map[string]json.RawMessage
-	if err := json.Unmarshal(rawMCP, &mcp); err != nil {
-		return fmt.Errorf("failed to parse mcp config: %w", err)
-	}
-
 	prefix := fmt.Sprintf("%s.", pluginName)
-	changed := false
-	for name, rawServer := range mcp {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-
-		var server map[string]json.RawMessage
-		if err := json.Unmarshal(rawServer, &server); err != nil {
-			return fmt.Errorf("failed to parse mcp server %s: %w", name, err)
-		}
-		if server == nil {
-			return fmt.Errorf("failed to parse mcp server %s: server must be an object", name)
-		}
-
-		if rawEnabled, ok := server["enabled"]; ok {
-			var current bool
-			if err := json.Unmarshal(rawEnabled, &current); err == nil && current == enabled {
+	return m.mutateMCPRaw(func(mcp map[string]json.RawMessage) (bool, error) {
+		changed := false
+		for name, rawServer := range mcp {
+			if !strings.HasPrefix(name, prefix) {
 				continue
 			}
+
+			var server map[string]json.RawMessage
+			if err := json.Unmarshal(rawServer, &server); err != nil {
+				return false, fmt.Errorf("failed to parse mcp server %s: %w", name, err)
+			}
+			if server == nil {
+				return false, fmt.Errorf("failed to parse mcp server %s: server must be an object", name)
+			}
+
+			if rawEnabled, ok := server["enabled"]; ok {
+				var current bool
+				if err := json.Unmarshal(rawEnabled, &current); err == nil && current == enabled {
+					continue
+				}
+			}
+
+			server["enabled"] = json.RawMessage(fmt.Sprintf("%t", enabled))
+			updated, err := json.Marshal(server)
+			if err != nil {
+				return false, fmt.Errorf("failed to marshal mcp server %s: %w", name, err)
+			}
+			mcp[name] = updated
+			changed = true
 		}
-
-		server["enabled"] = json.RawMessage(fmt.Sprintf("%t", enabled))
-		updated, err := json.Marshal(server)
-		if err != nil {
-			return fmt.Errorf("failed to marshal mcp server %s: %w", name, err)
-		}
-		mcp[name] = updated
-		changed = true
-	}
-
-	if !changed {
-		return nil
-	}
-
-	mcpData, err := json.Marshal(mcp)
-	if err != nil {
-		return fmt.Errorf("failed to marshal mcp config: %w", err)
-	}
-	fullConfig["mcp"] = mcpData
-
-	output, err := json.MarshalIndent(fullConfig, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal opencode.json: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	return os.WriteFile(configPath, append(output, '\n'), 0644)
+		return changed, nil
+	})
 }
 
 func (m *Manager) ListMCPServers() (map[string]MCPServer, error) {
-	opencodeConfig, err := m.readOpenCodeConfig()
+	mcp, err := m.readMCPRaw()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return make(map[string]MCPServer), nil
@@ -402,8 +310,16 @@ func (m *Manager) ListMCPServers() (map[string]MCPServer, error) {
 	}
 
 	servers := make(map[string]MCPServer)
-	for name, ocServer := range opencodeConfig.MCP {
-		servers[name] = m.fromOpenCodeServer(ocServer)
+	// 单个 entry 解析失败时跳过该 entry 但不让整个列表失败：
+	// ListMCPServers 是只读展示 API，坏掉一行不应阻断其他正常 server 的展示。
+	// 但解析失败必须给用户可见的信号（之前是静默 continue，typo 永远查不到）。
+	for name, raw := range mcp {
+		var oc OpenCodeMCPServer
+		if err := json.Unmarshal(raw, &oc); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Warning: skipping MCP server %q: failed to parse entry: %v\n", name, err)
+			continue
+		}
+		servers[name] = m.fromOpenCodeServer(oc)
 	}
 
 	return servers, nil
@@ -462,66 +378,108 @@ func (m *Manager) fromOpenCodeServer(oc OpenCodeMCPServer) MCPServer {
 	return server
 }
 
-func (m *Manager) readOpenCodeConfig() (*OpenCodeConfig, error) {
+// readOpenCodeFull 读取 opencode.json 为 map[string]json.RawMessage，保留所有顶层 key。
+// 文件不存在时返回 (nil, nil)。文件损坏时返回错误而不是覆盖用户配置。
+func (m *Manager) readOpenCodeFull() (map[string]json.RawMessage, error) {
 	configPath := m.opencodeConfigPath()
-
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &OpenCodeConfig{}, nil
+			return nil, nil
 		}
 		return nil, err
 	}
 
-	var fullConfig map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fullConfig); err != nil {
+	var full map[string]json.RawMessage
+	if err := json.Unmarshal(data, &full); err != nil {
 		return nil, fmt.Errorf("failed to parse opencode.json: %w", err)
 	}
-
-	oc := &OpenCodeConfig{}
-	if raw, ok := fullConfig["mcp"]; ok {
-		if err := json.Unmarshal(raw, &oc.MCP); err != nil {
-			return nil, fmt.Errorf("failed to parse mcp block of opencode.json: %w", err)
-		}
-	}
-
-	return oc, nil
+	return full, nil
 }
 
-func (m *Manager) writeOpenCodeConfig(oc *OpenCodeConfig) error {
-	configPath := m.opencodeConfigPath()
-
-	var fullConfig map[string]json.RawMessage
-	data, err := os.ReadFile(configPath)
-	if err == nil {
-		if err := json.Unmarshal(data, &fullConfig); err != nil {
-			return fmt.Errorf("failed to parse existing opencode.json (refusing to overwrite): %w", err)
-		}
+// writeOpenCodeFull 把完整 raw map 原子地写回 opencode.json。
+// 写到同目录临时文件再 rename，避免 SIGKILL / 磁盘满时留下截断的文件。
+func (m *Manager) writeOpenCodeFull(full map[string]json.RawMessage) error {
+	if full == nil {
+		full = make(map[string]json.RawMessage)
 	}
-	if fullConfig == nil {
-		fullConfig = make(map[string]json.RawMessage)
-	}
-
-	if len(oc.MCP) > 0 {
-		mcpData, err := json.Marshal(oc.MCP)
-		if err != nil {
-			return fmt.Errorf("failed to marshal mcp config: %w", err)
-		}
-		fullConfig["mcp"] = mcpData
-	} else {
-		delete(fullConfig, "mcp")
-	}
-
-	output, err := json.MarshalIndent(fullConfig, "", "  ")
+	output, err := json.MarshalIndent(full, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal opencode.json: %w", err)
 	}
+	return pathutil.WriteFileAtomic(m.opencodeConfigPath(), append(output, '\n'), 0644)
+}
 
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+// mutateMCPRaw 加载 opencode.json 一次，把 mcp 子映射交给 fn 修改，
+// 再写回一次。fn 返回 (changed, error)：error != nil 时跳过写回并把 error 透传，
+// changed == false 时跳过写回（no-op 优化）。
+//
+// 之前每个 Install/Uninstall/Enable/Disable 都先读出 mcp 子映射，写回前又
+// 重新读取完整 opencode.json——每次命令把整个 opencode.json 读了两遍。
+// 本 helper 一次读、一次写，并且保留所有顶层 key 和
+// 每个 server 的未知字段。
+func (m *Manager) mutateMCPRaw(fn func(mcp map[string]json.RawMessage) (changed bool, err error)) error {
+	full, err := m.readOpenCodeFull()
+	if err != nil {
+		return err
+	}
+	if full == nil {
+		full = make(map[string]json.RawMessage)
 	}
 
-	return os.WriteFile(configPath, append(output, '\n'), 0644)
+	var mcp map[string]json.RawMessage
+	if rawMCP, ok := full["mcp"]; ok && len(rawMCP) > 0 {
+		if err := json.Unmarshal(rawMCP, &mcp); err != nil {
+			return fmt.Errorf("failed to parse mcp block of opencode.json: %w", err)
+		}
+	}
+	if mcp == nil {
+		mcp = make(map[string]json.RawMessage)
+	}
+
+	changed, fnErr := fn(mcp)
+	if fnErr != nil {
+		return fnErr
+	}
+	if !changed {
+		return nil
+	}
+
+	if len(mcp) > 0 {
+		data, err := json.Marshal(mcp)
+		if err != nil {
+			return fmt.Errorf("failed to marshal mcp config: %w", err)
+		}
+		full["mcp"] = data
+	} else {
+		delete(full, "mcp")
+	}
+	return m.writeOpenCodeFull(full)
+}
+
+// readMCPRaw 仅给 ListMCPServers 这种只读 API 用。读改写流程请用 mutateMCPRaw。
+// 保留每个 server 的所有字段，包括 OpenCodeMCPServer 之外的未知字段。
+// 文件不存在或没有 mcp 块时返回空（非 nil）map。
+func (m *Manager) readMCPRaw() (map[string]json.RawMessage, error) {
+	full, err := m.readOpenCodeFull()
+	if err != nil {
+		return nil, err
+	}
+	if full == nil {
+		return make(map[string]json.RawMessage), nil
+	}
+	rawMCP, ok := full["mcp"]
+	if !ok || len(rawMCP) == 0 {
+		return make(map[string]json.RawMessage), nil
+	}
+	var mcp map[string]json.RawMessage
+	if err := json.Unmarshal(rawMCP, &mcp); err != nil {
+		return nil, fmt.Errorf("failed to parse mcp block of opencode.json: %w", err)
+	}
+	if mcp == nil {
+		mcp = make(map[string]json.RawMessage)
+	}
+	return mcp, nil
 }
 
 func (m *Manager) opencodeConfigPath() string {
@@ -553,6 +511,10 @@ func (m *Manager) substituteVariables(server MCPServer, pluginPath, pluginName, 
 		}
 	}
 
+	// 注意：Headers 不做变量替换。Headers 会随 HTTP 请求发到远端，
+	// 把本地路径（如 ${CLAUDE_PLUGIN_DATA}）注入到远端可见的 header 是不安全的。
+	// 参见 TestSubstitutePluginData/does_not_substitute_headers。
+
 	return result
 }
 
@@ -565,61 +527,4 @@ func (m *Manager) substituteString(str, pluginPath, pluginName, pluginVersion, p
 		result = strings.ReplaceAll(result, "${CLAUDE_PLUGIN_DATA}", pluginDataDir)
 	}
 	return result
-}
-
-func NormalizeMCPServers(pluginPath string, raw json.RawMessage) (map[string]MCPServer, []string, error) {
-	if len(raw) == 0 {
-		return nil, nil, nil
-	}
-
-	warnings := []string{}
-	servers := make(map[string]MCPServer)
-
-	var direct map[string]MCPServer
-	if err := json.Unmarshal(raw, &direct); err == nil {
-		for name, server := range direct {
-			servers[name] = server
-		}
-		return servers, warnings, nil
-	}
-
-	var items []json.RawMessage
-	if err := json.Unmarshal(raw, &items); err == nil {
-		for _, item := range items {
-			var entry map[string]MCPServer
-			if err := json.Unmarshal(item, &entry); err == nil {
-				for name, server := range entry {
-					servers[name] = server
-				}
-				continue
-			}
-
-			var pathStr string
-			if err := json.Unmarshal(item, &pathStr); err == nil {
-				absPath := pathStr
-				if !filepath.IsAbs(absPath) {
-					absPath = filepath.Join(pluginPath, absPath)
-				}
-				data, err := os.ReadFile(absPath)
-				if err != nil {
-					warnings = append(warnings, fmt.Sprintf("failed to read MCP config file %s: %v", pathStr, err))
-					continue
-				}
-				var fileServers map[string]MCPServer
-				if err := json.Unmarshal(data, &fileServers); err != nil {
-					warnings = append(warnings, fmt.Sprintf("failed to parse MCP config file %s: %v", pathStr, err))
-					continue
-				}
-				for name, server := range fileServers {
-					servers[name] = server
-				}
-				continue
-			}
-
-			warnings = append(warnings, fmt.Sprintf("unsupported MCP config entry: %s", string(item)))
-		}
-		return servers, warnings, nil
-	}
-
-	return nil, warnings, fmt.Errorf("mcpServers must be an object or array")
 }

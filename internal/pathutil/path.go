@@ -116,6 +116,56 @@ func isWithinBase(path, base string) bool {
 	return strings.HasPrefix(path, base+string(filepath.Separator)) || path == base
 }
 
+// IsWithinDir 判断 path 是否词法和 symlink 解析后都在 base 之内。
+// 用于所有 "拒绝删除/操作 base 之外的路径" 的安全守卫。
+// 之前 plugin.isWithinDir 和 marketplace.isWithinMarketsDir 各写了一份，
+// 语义略有差别——这里采用 plugin 版本（更宽松，能处理 path 还不存在的情况）。
+func IsWithinDir(path, base string) bool {
+	absPath, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	absBase, err := filepath.Abs(filepath.Clean(base))
+	if err != nil {
+		return false
+	}
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(absPath, absBase+sep) {
+		return false
+	}
+	evalBase, err := filepath.EvalSymlinks(absBase)
+	if err != nil {
+		return false
+	}
+	evalPath, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		return strings.HasPrefix(evalPath, evalBase+sep)
+	}
+	if !os.IsNotExist(err) {
+		return false
+	}
+	// path 本身不存在（例如 cache 刚被 rename 走），向上查找最近的 symlink 祖先
+	// 验证它仍解析到 base 之下，避免 ../escape 通过不存在的中间段绕过检查。
+	dir := absPath
+	for len(dir) > len(absBase) {
+		dir = filepath.Dir(dir)
+		info, err := os.Lstat(dir)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := filepath.EvalSymlinks(dir)
+			if err != nil {
+				return false
+			}
+			if !strings.HasPrefix(target, evalBase+sep) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func SanitizeAlias(alias string) string {
 	return safeCharRegex.ReplaceAllString(alias, "-")
 }

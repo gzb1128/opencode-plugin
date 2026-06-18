@@ -1,30 +1,18 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 )
 
-// Environment represents the runtime environment
+// Environment represents the runtime environment.
+// 生产代码请使用 config.DefaultPaths()；Environment 仅保留给测试构造临时路径。
 type Environment struct {
 	BaseDir        string
 	OpenCodeConfig string
 	AgentsDir      string
 }
 
-// DefaultEnvironment returns the default environment using user's home directory
-func DefaultEnvironment() *Environment {
-	homeDir, _ := os.UserHomeDir()
-	baseDir := filepath.Join(homeDir, ".opencode-plugin-cli")
-
-	return &Environment{
-		BaseDir:        baseDir,
-		OpenCodeConfig: filepath.Join(homeDir, ".config", "opencode"),
-		AgentsDir:      filepath.Join(homeDir, ".agents"),
-	}
-}
-
-// TestEnvironment creates a test environment in a temporary directory
+// TestEnvironment creates a test environment in a temporary directory.
 func TestEnvironment(tempDir string) *Environment {
 	return &Environment{
 		BaseDir:        filepath.Join(tempDir, ".opencode-plugin-cli"),
@@ -33,7 +21,7 @@ func TestEnvironment(tempDir string) *Environment {
 	}
 }
 
-// Paths returns the paths for the environment
+// Paths returns the paths for the environment.
 func (e *Environment) Paths() *Paths {
 	return &Paths{
 		BaseDir:        e.BaseDir,

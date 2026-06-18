@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/opencode/plugin-cli/internal/pathutil"
@@ -41,7 +40,7 @@ func (m *Manager) Add(name, url string) (*Marketplace, MarketSource, error) {
 }
 
 func (m *Manager) AddSource(name string, source MarketSource) (*Marketplace, MarketSource, error) {
-	marketDir := filepath.Join(m.marketsDir, name)
+	var marketDir string
 
 	switch s := source.(type) {
 	case *GitHubMarketSource, *GitMarketSource:
@@ -126,9 +125,14 @@ func (m *Manager) cacheMarketplaceFromURL(name string, source *URLMarketSource) 
 		return "", fmt.Errorf("HTTP request failed with status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// marketplace.json 通常只有几 KB；给 32MB 上限防止误指 / 恶意大文件导致 OOM。
+	const maxMarketplaceBytes = 32 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMarketplaceBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	if int64(len(body)) > maxMarketplaceBytes {
+		return "", fmt.Errorf("marketplace response exceeds %d bytes (likely wrong URL)", maxMarketplaceBytes)
 	}
 
 	tmpFile, err := os.CreateTemp(m.marketsDir, ".marketplace-tmp-*")
@@ -320,28 +324,10 @@ func (m *Manager) RemoveSource(name string, source MarketSource) error {
 	}
 }
 
+// isWithinMarketsDir delegates to pathutil.IsWithinDir.
+// 之前 plugin 包和这里各有一份近乎相同的实现，已经统一。
 func isWithinMarketsDir(path, marketsDir string) bool {
-	absPath, err := filepath.Abs(filepath.Clean(path))
-	if err != nil {
-		return false
-	}
-	absBase, err := filepath.Abs(filepath.Clean(marketsDir))
-	if err != nil {
-		return false
-	}
-	sep := string(filepath.Separator)
-	if !strings.HasPrefix(absPath, absBase+sep) {
-		return false
-	}
-	evalPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		return false
-	}
-	evalBase, err := filepath.EvalSymlinks(absBase)
-	if err != nil {
-		return false
-	}
-	return strings.HasPrefix(evalPath, evalBase+sep)
+	return pathutil.IsWithinDir(path, marketsDir)
 }
 
 func MarketSourceIndexPath(source MarketSource) (string, error) {
