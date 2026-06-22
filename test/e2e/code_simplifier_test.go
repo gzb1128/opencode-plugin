@@ -134,7 +134,7 @@ func TestE2ECodeSimplifier(t *testing.T) {
 		installer := plugin.NewInstaller(configMgr)
 
 		// Remove code-simplifier
-		if err := installer.Remove("code-simplifier", "claude-plugins-official"); err != nil {
+		if err := installer.Remove("code-simplifier", "claude-plugins-official", false); err != nil {
 			t.Fatalf("Failed to remove code-simplifier: %v", err)
 		}
 

@@ -642,10 +642,15 @@ func (i *Installer) Update(pluginName string, opts InstallOptions) error {
 	// 任意一步失败都不写新的 install record，让 record 仍然指向旧版本（便于诊断）。
 	// 2a. 删旧 symlinks / MCP。这些指向 OLD 路径；即使新旧路径相同，文件集合也可能变化。
 	//     用 oldCachePathResolved（已 EvalSymlinks）确保和 symlink target 词法一致。
+	//     注意：Stage 1 已经把 oldCachePath rename 成 .update-backup，所以 oldCachePath
+	//     在磁盘上不存在了。orphan 名字撞车检查必须查 backupPath（旧 plugin 的 entry
+	//     现在在那里），否则每个 orphan 都会被误判成"不归本 plugin 管"而沉默跳过。
 	if oldCachePathResolved != "" {
-		if _, err := i.linker.RemoveSymlinks(oldCachePathResolved); err != nil {
+		_, orphanWarnings, err := i.linker.RemoveSymlinksWithNameClashPath(oldCachePathResolved, backupPath, opts.Force)
+		if err != nil {
 			return fmt.Errorf("failed to remove old symlinks: %w", err)
 		}
+		i.reportOrphanWarnings(orphanWarnings)
 	}
 	if err := i.mcpManager.UninstallMCPConfig(resolved.Plugin.Name); err != nil {
 		return fmt.Errorf("failed to remove old MCP config: %w", err)
@@ -726,7 +731,7 @@ func (i *Installer) Update(pluginName string, opts InstallOptions) error {
 	return nil
 }
 
-func (i *Installer) Remove(pluginName, marketName string) error {
+func (i *Installer) Remove(pluginName, marketName string, force bool) error {
 	key := fmt.Sprintf("%s@%s", pluginName, marketName)
 	record, err := i.configMgr.GetInstallRecord(key)
 	if err != nil {
@@ -739,7 +744,8 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 		return fmt.Errorf("refusing to remove path %q outside cache directory %q", installPath, cacheDir)
 	}
 
-	count, symlinkErr := i.linker.RemoveSymlinks(installPath)
+	count, orphanWarnings, symlinkErr := i.linker.RemoveSymlinks(installPath, force)
+	i.reportOrphanWarnings(orphanWarnings)
 	if symlinkErr != nil {
 		// 之前直接 Printf 成 warning 然后继续，导致 plugin remove 看起来成功
 		// 但 ~/.agents/skills/<x> 还是指向已删除的 cache（野指针）。
@@ -778,7 +784,21 @@ func (i *Installer) Remove(pluginName, marketName string) error {
 	return nil
 }
 
-func (i *Installer) Disable(pluginName, marketName string) error {
+// reportOrphanWarnings 打印 RemoveSymlinks 在非 force 模式下未删除的 orphan
+// symlink（名字匹配 plugin 但 target 在 cache 之外，多为调试态残留）。
+// 不返回 error、不阻塞流程——orphan 不是失败状态，只是用户需要知情。
+func (i *Installer) reportOrphanWarnings(warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "⚠️  %d symlink(s) point outside the plugin cache and were left in place:\n", len(warnings))
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "    %s\n", w)
+	}
+	fmt.Fprintf(os.Stderr, "    Rerun with -f/--force to remove them.\n")
+}
+
+func (i *Installer) Disable(pluginName, marketName string, force bool) error {
 	key := fmt.Sprintf("%s@%s", pluginName, marketName)
 	record, err := i.configMgr.GetInstallRecord(key)
 	if err != nil {
@@ -792,9 +812,11 @@ func (i *Installer) Disable(pluginName, marketName string) error {
 	}
 
 	if installPath != "" {
-		if _, err := i.linker.RemoveSymlinks(installPath); err != nil {
+		_, warnings, err := i.linker.RemoveSymlinks(installPath, force)
+		if err != nil {
 			return fmt.Errorf("failed to remove symlinks: %w", err)
 		}
+		i.reportOrphanWarnings(warnings)
 	}
 
 	if err := i.mcpManager.DisableMCPConfig(pluginName); err != nil {

@@ -3,6 +3,8 @@ package opencode
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -219,7 +221,7 @@ func TestLinker_RemoveSymlinks(t *testing.T) {
 		t.Fatalf("expected 3 symlinks created, got %d", totalLinked)
 	}
 
-	removed, err := linker.RemoveSymlinks(pluginPath)
+	removed, _, err := linker.RemoveSymlinks(pluginPath, false)
 	if err != nil {
 		t.Fatalf("RemoveSymlinks() error = %v", err)
 	}
@@ -247,7 +249,7 @@ func TestLinker_RemoveSymlinks_PreservesOtherLinks(t *testing.T) {
 	linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 	linker.CreateSymlinksFromManifest(otherPluginPath, nil, false)
 
-	removed, err := linker.RemoveSymlinks(pluginPath)
+	removed, _, err := linker.RemoveSymlinks(pluginPath, false)
 	if err != nil {
 		t.Fatalf("RemoveSymlinks() error = %v", err)
 	}
@@ -272,7 +274,7 @@ func TestLinker_RemoveSymlinks_PreservesNonLinks(t *testing.T) {
 
 	linker.CreateSymlinksFromManifest(pluginPath, nil, false)
 
-	removed, err := linker.RemoveSymlinks(pluginPath)
+	removed, _, err := linker.RemoveSymlinks(pluginPath, false)
 	if err != nil {
 		t.Fatalf("RemoveSymlinks() error = %v", err)
 	}
@@ -285,6 +287,289 @@ func TestLinker_RemoveSymlinks_PreservesNonLinks(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(skillsDir, "real-file.md")); err != nil {
 		t.Error("real-file.md should not be removed")
+	}
+}
+
+// TestLinker_RemoveSymlinks_OrphanPreservedWithoutForce reproduces the original bug:
+// a symlink whose name matches a plugin entry but whose target lives OUTSIDE the
+// plugin cache (typical of dev-time 调试态残留). Without -f the link must survive
+// AND be surfaced in warnings — not silently skipped like before.
+//
+// Also asserts the negative case: a symlink that belongs to ANOTHER plugin (no
+// matching name in this plugin's dir) must NOT be flagged as an orphan — that's
+// the common, non-orphan case, and flagging it produces false-positive noise.
+//
+// Warning content (not just count) is asserted, so a regression that inverted
+// the (a)/(b) classifier — flagging bar instead of foo — would fail this test.
+func TestLinker_RemoveSymlinks_OrphanPreservedWithoutForce(t *testing.T) {
+	linker, agentsDir, pluginPath := setupLinkerTest(t)
+
+	// pluginPath 下确实有 skills/foo 这个 entry —— 这是"名字撞车"成立的前提。
+	os.MkdirAll(filepath.Join(pluginPath, "skills", "foo"), 0755)
+	os.WriteFile(filepath.Join(pluginPath, "skills", "foo", "SKILL.md"), []byte("# in-cache"), 0644)
+
+	// orphan target：pluginPath 之外的另一个临时目录，模拟开发态 ln -s 源码仓库。
+	outside := filepath.Join(filepath.Dir(pluginPath), "elsewhere")
+	os.MkdirAll(outside, 0755)
+	os.WriteFile(filepath.Join(outside, "foo"), []byte("# orphan"), 0644)
+
+	skillsDir := filepath.Join(agentsDir, "skills")
+	os.MkdirAll(skillsDir, 0755)
+	orphanLink := filepath.Join(skillsDir, "foo")
+	if err := os.Symlink(outside, orphanLink); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	// 另一个 plugin 的 skill：本 pluginPath/skills/ 下没有 bar。
+	// 它指向外部但名字不撞车 → 必须沉默跳过，不能算 orphan。
+	otherPluginPath := filepath.Join(filepath.Dir(pluginPath), "other-plugin")
+	os.MkdirAll(filepath.Join(otherPluginPath, "skills", "bar"), 0755)
+	os.WriteFile(filepath.Join(otherPluginPath, "skills", "bar", "SKILL.md"), []byte("# other"), 0644)
+	otherLink := filepath.Join(skillsDir, "bar")
+	if err := os.Symlink(filepath.Join(otherPluginPath, "skills", "bar"), otherLink); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	removed, warnings, err := linker.RemoveSymlinks(pluginPath, false)
+	if err != nil {
+		t.Fatalf("RemoveSymlinks() error = %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0 (orphan must not be deleted without -f)", removed)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %d entries, want 1 (only name-clashing orphan should be surfaced): %v", len(warnings), warnings)
+	}
+	// 内容断言：warning 必须提到 orphan foo，且不能误带 bar。
+	// 防止 (a)/(b) 分类被反转后仍然 count=1 通过测试。
+	w := warnings[0]
+	if !strings.Contains(w, "foo") {
+		t.Errorf("warning should mention the orphan 'foo', got: %s", w)
+	}
+	if strings.Contains(w, "bar") {
+		t.Errorf("warning must NOT mention other plugin's 'bar' (false positive), got: %s", w)
+	}
+
+	// orphan symlink 仍在 —— 这是非 force 模式的核心约定。
+	if _, err := os.Lstat(orphanLink); err != nil {
+		t.Errorf("orphan symlink %s should still exist (got %v)", orphanLink, err)
+	}
+	// 别人的 symlink 也必须仍在，并且没有被误报。
+	if _, err := os.Lstat(otherLink); err != nil {
+		t.Errorf("other plugin's symlink %s should still exist (got %v)", otherLink, err)
+	}
+}
+
+// TestLinker_RemoveSymlinks_OrphanForceRemoved verifies -f deletes the orphan
+// and counts it as removed, matching the name-based semantics of linkComponentDir
+// on the creation side. Also asserts no warnings under force and that an
+// other-plugin symlink survives (force only targets name-clashing orphans).
+func TestLinker_RemoveSymlinks_OrphanForceRemoved(t *testing.T) {
+	linker, agentsDir, pluginPath := setupLinkerTest(t)
+
+	os.MkdirAll(filepath.Join(pluginPath, "skills", "foo"), 0755)
+	os.WriteFile(filepath.Join(pluginPath, "skills", "foo", "SKILL.md"), []byte("# in-cache"), 0644)
+
+	outside := filepath.Join(filepath.Dir(pluginPath), "elsewhere")
+	os.MkdirAll(outside, 0755)
+	os.WriteFile(filepath.Join(outside, "foo"), []byte("# orphan"), 0644)
+
+	skillsDir := filepath.Join(agentsDir, "skills")
+	os.MkdirAll(skillsDir, 0755)
+	orphanLink := filepath.Join(skillsDir, "foo")
+	if err := os.Symlink(outside, orphanLink); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	// 别人的 symlink 也在 —— force 不能误删。
+	otherPluginPath := filepath.Join(filepath.Dir(pluginPath), "other-plugin")
+	os.MkdirAll(filepath.Join(otherPluginPath, "skills", "bar"), 0755)
+	os.WriteFile(filepath.Join(otherPluginPath, "skills", "bar", "SKILL.md"), []byte("# other"), 0644)
+	otherLink := filepath.Join(skillsDir, "bar")
+	if err := os.Symlink(filepath.Join(otherPluginPath, "skills", "bar"), otherLink); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	removed, warnings, err := linker.RemoveSymlinks(pluginPath, true)
+	if err != nil {
+		t.Fatalf("RemoveSymlinks() error = %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("removed = %d, want 1 (force should delete the orphan only)", removed)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("warnings = %d entries, want 0 under force (got %v)", len(warnings), warnings)
+	}
+
+	assertNoFile(t, orphanLink)
+	// force 不能误伤别人的 symlink。
+	if _, err := os.Lstat(otherLink); err != nil {
+		t.Errorf("other plugin's symlink %s should survive force (got %v)", otherLink, err)
+	}
+}
+
+// TestLinker_RemoveSymlinks_MixedInCacheAndOrphan verifies a single RemoveSymlinks
+// call correctly handles a mix of in-cache (delete) and orphan (warn/keep) entries
+// in the same loop. Guards against a bug that returned early on the first orphan
+// instead of continuing to process subsequent in-cache entries.
+func TestLinker_RemoveSymlinks_MixedInCacheAndOrphan(t *testing.T) {
+	linker, agentsDir, pluginPath := setupLinkerTest(t)
+
+	// foo: in-cache symlink (should be removed)
+	os.MkdirAll(filepath.Join(pluginPath, "skills", "foo"), 0755)
+	os.WriteFile(filepath.Join(pluginPath, "skills", "foo", "SKILL.md"), []byte("# in-cache"), 0644)
+	// bar: orphan — name exists in plugin but target points outside
+	os.MkdirAll(filepath.Join(pluginPath, "skills", "bar"), 0755)
+	os.WriteFile(filepath.Join(pluginPath, "skills", "bar", "SKILL.md"), []byte("# in-cache-bar"), 0644)
+	// baz: in-cache symlink (should be removed) — comes AFTER the orphan
+	// to verify the loop doesn't early-return on the orphan.
+	os.MkdirAll(filepath.Join(pluginPath, "skills", "baz"), 0755)
+	os.WriteFile(filepath.Join(pluginPath, "skills", "baz", "SKILL.md"), []byte("# in-cache-baz"), 0644)
+
+	skillsDir := filepath.Join(agentsDir, "skills")
+	os.MkdirAll(skillsDir, 0755)
+
+	// in-cache links
+	mustSymlink(t, filepath.Join(pluginPath, "skills", "foo"), filepath.Join(skillsDir, "foo"))
+	mustSymlink(t, filepath.Join(pluginPath, "skills", "baz"), filepath.Join(skillsDir, "baz"))
+	// orphan link (target outside)
+	outside := filepath.Join(filepath.Dir(pluginPath), "elsewhere")
+	os.MkdirAll(outside, 0755)
+	os.WriteFile(filepath.Join(outside, "bar"), []byte("# orphan"), 0644)
+	mustSymlink(t, outside, filepath.Join(skillsDir, "bar"))
+
+	t.Run("force=false", func(t *testing.T) {
+		removed, warnings, err := linker.RemoveSymlinks(pluginPath, false)
+		if err != nil {
+			t.Fatalf("RemoveSymlinks() error = %v", err)
+		}
+		// foo + baz deleted; bar warned.
+		if removed != 2 {
+			t.Errorf("removed = %d, want 2 (foo + baz, both in-cache)", removed)
+		}
+		if len(warnings) != 1 {
+			t.Fatalf("warnings = %d, want 1 (bar only): %v", len(warnings), warnings)
+		}
+		if !strings.Contains(warnings[0], "bar") {
+			t.Errorf("warning should mention orphan 'bar', got: %s", warnings[0])
+		}
+		// bar survives (no force)
+		if _, err := os.Lstat(filepath.Join(skillsDir, "bar")); err != nil {
+			t.Errorf("orphan 'bar' should survive without force: %v", err)
+		}
+	})
+}
+
+// TestLinker_RemoveSymlinks_NameClashPathForUpdate simulates Update Stage 2's
+// exact situation: the original plugin cache dir has been renamed to *.update-backup
+// before RemoveSymlinks runs. The default pluginPath lookup would always miss the
+// entry (IsNotExist) and silently skip orphans; the nameClashPath parameter
+// routes the lookup to the backup dir so orphans are correctly detected.
+func TestLinker_RemoveSymlinks_NameClashPathForUpdate(t *testing.T) {
+	linker, agentsDir, pluginPath := setupLinkerTest(t)
+
+	// 在 rename 之前先把 skills/foo 建好——rename 之后它就跟着到了 backup 里。
+	os.MkdirAll(filepath.Join(pluginPath, "skills", "foo"), 0755)
+	os.WriteFile(filepath.Join(pluginPath, "skills", "foo", "SKILL.md"), []byte("# in-cache"), 0644)
+
+	// 模拟 Stage 1：把原始 cache rename 成 .update-backup。
+	backupPath := pluginPath + ".update-backup"
+	if err := os.Rename(pluginPath, backupPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	// orphan symlink：名字 foo 在 backup 里有，target 在外。
+	outside := filepath.Join(filepath.Dir(pluginPath), "elsewhere")
+	os.MkdirAll(outside, 0755)
+	os.WriteFile(filepath.Join(outside, "foo"), []byte("# orphan"), 0644)
+	skillsDir := filepath.Join(agentsDir, "skills")
+	os.MkdirAll(skillsDir, 0755)
+	orphanLink := filepath.Join(skillsDir, "foo")
+	mustSymlink(t, outside, orphanLink)
+
+	t.Run("default_path_silently_misses_orphan", func(t *testing.T) {
+		// 不传 nameClashPath：pluginPath 不存在 → srcEntry IsNotExist → 沉默跳过。
+		// 这是 Update Stage 2 修复前的行为；保留作为回归对照。
+		removed, warnings, err := linker.RemoveSymlinks(pluginPath, false)
+		if err != nil {
+			t.Fatalf("RemoveSymlinks() error = %v", err)
+		}
+		if removed != 0 || len(warnings) != 0 {
+			t.Errorf("default path should miss orphan (pluginPath gone): removed=%d warnings=%v", removed, warnings)
+		}
+		// 重置：把 orphan link 重建（上面那次调用没动它）。
+		if _, err := os.Lstat(orphanLink); err != nil {
+			mustSymlink(t, outside, orphanLink)
+		}
+	})
+
+	t.Run("nameClashPath_finds_orphan_in_backup", func(t *testing.T) {
+		// 传 backupPath 作为 nameClashPath：现在能查到 foo → 正确识别 orphan。
+		removed, warnings, err := linker.RemoveSymlinksWithNameClashPath(pluginPath, backupPath, false)
+		if err != nil {
+			t.Fatalf("RemoveSymlinksWithNameClashPath() error = %v", err)
+		}
+		if removed != 0 {
+			t.Errorf("removed = %d, want 0 (non-force keeps orphan)", removed)
+		}
+		if len(warnings) != 1 {
+			t.Fatalf("warnings = %d, want 1 (orphan should be detected via backupPath): %v", len(warnings), warnings)
+		}
+		if !strings.Contains(warnings[0], "foo") {
+			t.Errorf("warning should mention 'foo', got: %s", warnings[0])
+		}
+	})
+
+	t.Run("nameClashPath_with_force_deletes_orphan", func(t *testing.T) {
+		// 确保 orphan 还在（上一个 subtest 没 force 删）。
+		if _, err := os.Lstat(orphanLink); err != nil {
+			mustSymlink(t, outside, orphanLink)
+		}
+		removed, warnings, err := linker.RemoveSymlinksWithNameClashPath(pluginPath, backupPath, true)
+		if err != nil {
+			t.Fatalf("RemoveSymlinksWithNameClashPath() error = %v", err)
+		}
+		if removed != 1 {
+			t.Errorf("removed = %d, want 1 (force should delete orphan)", removed)
+		}
+		if len(warnings) != 0 {
+			t.Errorf("warnings = %d, want 0 under force: %v", len(warnings), warnings)
+		}
+		assertNoFile(t, orphanLink)
+	})
+}
+
+// TestLinker_RemoveSymlinks_NormalInCache regression-guards the happy path under
+// both force values: a normal in-cache symlink is removed regardless of -f.
+func TestLinker_RemoveSymlinks_NormalInCache(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run("force="+strconv.FormatBool(force), func(t *testing.T) {
+			linker, agentsDir, pluginPath := setupLinkerTest(t)
+
+			os.MkdirAll(filepath.Join(pluginPath, "skills", "foo"), 0755)
+			os.WriteFile(filepath.Join(pluginPath, "skills", "foo", "SKILL.md"), []byte("# in-cache"), 0644)
+
+			if _, err := linker.CreateSymlinksFromManifest(pluginPath, nil, false); err != nil {
+				t.Fatalf("CreateSymlinks() error = %v", err)
+			}
+
+			linkPath := filepath.Join(agentsDir, "skills", "foo")
+			if _, err := os.Lstat(linkPath); err != nil {
+				t.Fatalf("setup: symlink not created: %v", err)
+			}
+
+			removed, warnings, err := linker.RemoveSymlinks(pluginPath, force)
+			if err != nil {
+				t.Fatalf("RemoveSymlinks() error = %v", err)
+			}
+			if removed != 1 {
+				t.Errorf("removed = %d, want 1", removed)
+			}
+			if len(warnings) != 0 {
+				t.Errorf("warnings = %d entries, want 0 for in-cache symlink (got %v)", len(warnings), warnings)
+			}
+			assertNoFile(t, linkPath)
+		})
 	}
 }
 
@@ -391,5 +676,12 @@ func assertNoFile(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Lstat(path); err == nil {
 		t.Errorf("file %s should not exist", path)
+	}
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", link, target, err)
 	}
 }

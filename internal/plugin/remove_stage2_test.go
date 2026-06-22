@@ -27,7 +27,7 @@ func TestInstaller_Remove(t *testing.T) {
 			t.Fatalf("precondition: symlink should exist, got %v", err)
 		}
 
-		if err := installer.Remove("test-plugin", "test-market"); err != nil {
+		if err := installer.Remove("test-plugin", "test-market", false); err != nil {
 			t.Fatalf("Remove() error = %v", err)
 		}
 
@@ -60,7 +60,7 @@ func TestInstaller_Remove(t *testing.T) {
 			t.Fatalf("AddInstallRecord: %v", err)
 		}
 
-		err := installer.Remove("evil", "market")
+		err := installer.Remove("evil", "market", false)
 		if err == nil {
 			t.Fatal("expected error refusing to remove path outside cache dir, got nil")
 		}
@@ -93,7 +93,7 @@ func TestInstaller_Remove_PropagatesCleanupErrors(t *testing.T) {
 	os.Chmod(lockedDir, 0500)
 	defer os.Chmod(lockedDir, 0755) // 测试结束清理
 
-	err := installer.Remove("test-plugin", "test-market")
+	err := installer.Remove("test-plugin", "test-market", false)
 	if err == nil {
 		t.Fatal("expected Remove to return cleanup error, got nil")
 	}

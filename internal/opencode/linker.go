@@ -324,13 +324,39 @@ func parseCommandField(raw interface{}) []ComponentPath {
 	}
 }
 
-func (l *Linker) RemoveSymlinks(pluginPath string) (int, error) {
+// RemoveSymlinks removes symlinks under ~/.agents/{skills,commands,agents} that
+// belong to the given plugin. Returns (removedCount, orphanWarnings, error).
+//
+// pluginPath is the canonical plugin cache dir used to decide whether a symlink
+// target is "inside" the plugin. nameClashPath, when non-empty, overrides where
+// to look up the plugin's own component entries for the orphan name-clash test
+// (used by Update Stage 2: oldCachePath has been renamed to *.update-backup by
+// Stage 1, so we look up names in the backup while still removing symlinks whose
+// target was the original cache path).
+//
+// orphanWarnings holds symlinks whose name matches a plugin entry but whose
+// target resolves OUTSIDE pluginPath (typical of dev-time 调试态软链留下的孤儿).
+// 这些链接严格说不归本 plugin 管，但名字撞车会让用户困惑，所以单独上报：
+//   - force=false：保留并放进 orphanWarnings，让调用方决定如何提示用户；
+//   - force=true ：直接删除（按名字匹配对齐创建侧 linkComponentDir 的语义）。
+func (l *Linker) RemoveSymlinks(pluginPath string, force bool) (int, []string, error) {
+	return l.RemoveSymlinksWithNameClashPath(pluginPath, "", force)
+}
+
+// RemoveSymlinksWithNameClashPath is the advanced form; see RemoveSymlinks doc.
+// When nameClashPath == "", it falls back to pluginPath (the common case for
+// disable/remove where the cache dir is still in place).
+func (l *Linker) RemoveSymlinksWithNameClashPath(pluginPath, nameClashPath string, force bool) (int, []string, error) {
 	total := 0
+	var allWarnings []string
 	var errs []error
 
 	components := []string{"skills", "commands", "agents"}
 	for _, component := range components {
-		n, err := l.unlinkComponentDir(pluginPath, component)
+		n, warnings, err := l.unlinkComponentDir(pluginPath, nameClashPath, component, force)
+		// 即使该 component 返回 err，已收集到的 warnings 也要上报——
+		// 用户在 err 提示下最需要知道哪些 orphan 可以用 -f 清理。
+		allWarnings = append(allWarnings, warnings...)
 		if err != nil {
 			// 累积所有 component 的错误，返回聚合后的 error。
 			// 之前的实现把错误 Printf 出去然后吞掉，调用方永远看不到失败，
@@ -342,22 +368,22 @@ func (l *Linker) RemoveSymlinks(pluginPath string) (int, error) {
 	}
 
 	if len(errs) > 0 {
-		return total, fmt.Errorf("failed to remove some symlinks: %v", errs)
+		return total, allWarnings, fmt.Errorf("failed to remove some symlinks: %v", errs)
 	}
-	return total, nil
+	return total, allWarnings, nil
 }
 
-func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
+func (l *Linker) unlinkComponentDir(pluginPath, nameClashPath, component string, force bool) (int, []string, error) {
 	componentDir := filepath.Join(l.agentsDir, component)
 	if _, err := os.Stat(componentDir); os.IsNotExist(err) {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	files, err := os.ReadDir(componentDir)
 	if err != nil {
 		// 之前直接 return (0, nil) 把 ReadDir 错误当成"空目录"，
 		// 这样 plugin remove 看起来成功了，但所有 symlink 都还在。
-		return 0, fmt.Errorf("failed to read %s: %w", componentDir, err)
+		return 0, nil, fmt.Errorf("failed to read %s: %w", componentDir, err)
 	}
 
 	count := 0
@@ -365,8 +391,19 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 	if evaluatedPluginPath, err := filepath.EvalSymlinks(absPluginPath); err == nil {
 		absPluginPath = evaluatedPluginPath
 	}
+	// orphan 名字撞车检查用的 plugin 目录：默认是 pluginPath，
+	// 但 Update Stage 2 在调用前已经把 pluginPath rename 成 .update-backup，
+	// 此时用 backupPath 才能查到旧 plugin 的 component entry 列表。
+	absNameClashPath := absPluginPath
+	if nameClashPath != "" {
+		absNameClashPath, _ = filepath.Abs(nameClashPath)
+		if ev, err := filepath.EvalSymlinks(absNameClashPath); err == nil {
+			absNameClashPath = ev
+		}
+	}
 
 	var skipped []string
+	var warnings []string
 	for _, file := range files {
 		linkPath := filepath.Join(componentDir, file.Name())
 
@@ -392,6 +429,35 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 		}
 
 		if strings.HasPrefix(rel, "..") {
+			// target 落在 pluginPath 之外。这有两种情况，必须区分：
+			//   (a) 这个 symlink 本就不归本 plugin 管（target 指向其它 plugin 的 cache）——
+			//       正常状态，沉默跳过。
+			//   (b) symlink 名字撞了本 plugin 的某项（pluginPath/<component>/<name>
+			//       存在），但 target 指向别处——这才是 orphan：通常是早期调试态
+			//       直接 ln -s 源码仓库残留下的、本该属于本 plugin 的旧链接。
+			// 创建侧 linkComponentDir 只按 file.Name() 建链接，删除侧按 target
+			// 判断归属本就不对称；只有 (b) 这种"名字撞车"才需要上报 / force 删除。
+			srcEntry := filepath.Join(absNameClashPath, component, file.Name())
+			if _, statErr := os.Stat(srcEntry); statErr != nil {
+				if os.IsNotExist(statErr) {
+					// (a) 不归本 plugin 管 —— 沉默跳过。
+					continue
+				}
+				// 其它错误（EACCES / ELOOP / I/O）不能当成"不归本 plugin 管"：
+				// 否则 -f 也会沉默失效。上报到 skipped，让调用方知道。
+				skipped = append(skipped, fmt.Sprintf("stat plugin entry %s: %v", srcEntry, statErr))
+				continue
+			}
+			// (b) orphan：名字撞车但 target 在外。
+			if force {
+				if err := os.Remove(linkPath); err != nil {
+					skipped = append(skipped, fmt.Sprintf("remove orphan %s: %v", linkPath, err))
+				} else {
+					count++
+				}
+			} else {
+				warnings = append(warnings, fmt.Sprintf("%s -> %s (outside plugin cache)", linkPath, absLinkTarget))
+			}
 			continue
 		}
 
@@ -404,9 +470,9 @@ func (l *Linker) unlinkComponentDir(pluginPath, component string) (int, error) {
 	}
 
 	if len(skipped) > 0 {
-		return count, fmt.Errorf("some symlinks could not be removed: %v", skipped)
+		return count, warnings, fmt.Errorf("some symlinks could not be removed: %v", skipped)
 	}
-	return count, nil
+	return count, warnings, nil
 }
 
 func ReadManifest(manifestPath string) (map[string]interface{}, error) {

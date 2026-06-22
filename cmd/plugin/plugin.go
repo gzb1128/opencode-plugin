@@ -17,6 +17,8 @@ func init() {
 	updateCmd.Flags().BoolP("force", "f", false, "Force overwrite existing skills, commands, and agents")
 	searchCmd.Flags().StringP("market", "m", "", "Search in specific marketplace")
 	enableCmd.Flags().BoolP("force", "f", false, "Force overwrite existing skills, commands, and agents")
+	disableCmd.Flags().BoolP("force", "f", false, "Force-remove orphan symlinks pointing outside the plugin cache")
+	removeCmd.Flags().BoolP("force", "f", false, "Force-remove orphan symlinks pointing outside the plugin cache")
 
 	Cmd.AddCommand(installCmd)
 	Cmd.AddCommand(removeCmd)

@@ -65,6 +65,29 @@ opencode-plugin plugin install my-plugin -f
 ```
 用于强制覆盖已存在的 skills、commands、agents。
 
+### orphan symlink：disable/remove/update 的强制清理
+
+`disable` / `remove` / `update` 删除 symlink 时（`opencode.RemoveSymlinks`），
+正常只删 **target 落在 plugin cache 目录之内** 的链接。如果某个 symlink
+**名字**匹配 plugin 但 **target 指向 cache 之外**（典型场景：开发态直接
+`ln -s` 源码仓库留下的孤儿），它属于 orphan：
+
+- **默认**：保留并打印 ⚠️ 列出所有 orphan，命令照常完成（orphan 不是失败，
+  只是知情上报）。
+- **`-f` / `--force`**：按名字匹配直接删除 orphan，对齐创建侧 `linkComponentDir`
+  的按名匹配语义。
+
+```bash
+# 看见 ⚠️ orphan 提示后强制清理
+opencode-plugin plugin disable opencode-customize@skill-forge -f
+opencode-plugin plugin remove  opencode-customize@skill-forge -f
+opencode-plugin plugin update  opencode-customize@skill-forge -f
+```
+
+`installer.Remove` / `installer.Disable` 签名均带 `force bool` 形参；
+`market update` 的自动清理（`cmd/market/update.go`）永远传 `false`
+（自动流程不强制删用户手建的软链）。
+
 ### `plugin update` 的原子性（two-phase commit）
 
 `plugin update` 走 `installer.Update()`（`internal/plugin/installer.go`），不再
