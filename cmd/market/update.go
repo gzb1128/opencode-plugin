@@ -164,7 +164,7 @@ func cleanupDeletedPlugins(configMgr *config.Manager, marketName string, oldInde
 	for _, pluginName := range deleted {
 		if installedSet[pluginName] {
 			fmt.Printf("  Removing deleted plugin: %s@%s\n", pluginName, marketName)
-			if err := installer.Remove(pluginName, marketName); err != nil {
+			if err := installer.Remove(pluginName, marketName, false); err != nil {
 				log.Printf("Warning: failed to remove deleted plugin %s@%s: %v", pluginName, marketName, err)
 			}
 		}

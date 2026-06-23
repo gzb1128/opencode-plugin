@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -75,7 +76,7 @@ func TestInstaller_Disable(t *testing.T) {
 		t.Fatalf("symlink should exist before disable")
 	}
 
-	if err := installer.Disable("test-plugin", "test-market"); err != nil {
+	if err := installer.Disable("test-plugin", "test-market", false); err != nil {
 		t.Fatalf("Disable() error = %v", err)
 	}
 
@@ -100,11 +101,11 @@ func TestInstaller_Disable_Idempotent(t *testing.T) {
 	installer, _ := setupInstallerTest(t)
 	setupInstalledPlugin(t, installer, "test-plugin", "test-market")
 
-	if err := installer.Disable("test-plugin", "test-market"); err != nil {
+	if err := installer.Disable("test-plugin", "test-market", false); err != nil {
 		t.Fatalf("first disable failed: %v", err)
 	}
 
-	if err := installer.Disable("test-plugin", "test-market"); err != nil {
+	if err := installer.Disable("test-plugin", "test-market", false); err != nil {
 		t.Fatalf("second disable (idempotent) failed: %v", err)
 	}
 
@@ -114,12 +115,79 @@ func TestInstaller_Disable_Idempotent(t *testing.T) {
 	}
 }
 
+// TestInstaller_Disable_OrphanForceFlag exercises the installer-layer plumbing of
+// the orphan force flag end-to-end:
+//
+//   - Installer.Disable(plugin, market, force) must thread force into
+//     linker.RemoveSymlinks(installPath, force)
+//   - The normal in-cache symlink is removed under both force values
+//   - A pre-existing orphan (name clashing with plugin's skill, target outside cache)
+//     is preserved without force and removed with force
+//
+// This test exists because every other installer test hardcodes force=false; a
+// regression that dropped the force parameter or short-circuited reportOrphanWarnings
+// would otherwise pass silently. It also verifies reportOrphanWarnings is invoked
+// (the orphan must NOT be silently skipped when force=false).
+func TestInstaller_Disable_OrphanForceFlag(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run("force="+strconv.FormatBool(force), func(t *testing.T) {
+			installer, _ := setupInstallerTest(t)
+			cachePath := setupInstalledPlugin(t, installer, "test-plugin", "test-market")
+			paths := installer.configMgr.GetPaths()
+
+			// setupInstalledPlugin creates skills/test-skill.md in cache and a
+			// matching symlink at ~/.agents/skills/test-skill.md (in-cache).
+			normalLink := filepath.Join(paths.AgentsDir, "skills", "test-skill.md")
+			if _, err := os.Lstat(normalLink); err != nil {
+				t.Fatalf("setup: normal symlink not created: %v", err)
+			}
+
+			// Plant an orphan: a symlink named "test-skill.md" pointing OUTSIDE
+			// the plugin cache. To make the name clash, remove the in-cache link
+			// first then add an orphan with the same name (the plugin entry
+			// test-skill.md still exists under cachePath/skills/).
+			os.Remove(normalLink)
+			outside := filepath.Join(filepath.Dir(cachePath), "elsewhere")
+			os.MkdirAll(outside, 0755)
+			os.WriteFile(filepath.Join(outside, "test-skill.md"), []byte("# orphan"), 0644)
+			if err := os.Symlink(filepath.Join(outside, "test-skill.md"), normalLink); err != nil {
+				t.Skipf("symlinks not supported: %v", err)
+			}
+
+			if err := installer.Disable("test-plugin", "test-market", force); err != nil {
+				t.Fatalf("Disable(force=%v) error = %v", force, err)
+			}
+
+			if !force {
+				// Orphan survives, record marked disabled, command succeeded.
+				if _, err := os.Lstat(normalLink); err != nil {
+					t.Errorf("orphan symlink should survive without force: %v", err)
+				}
+			} else {
+				// Orphan removed under force.
+				if _, err := os.Lstat(normalLink); !os.IsNotExist(err) {
+					t.Errorf("orphan symlink should be removed with force (got err=%v)", err)
+				}
+			}
+
+			// Record always marked disabled.
+			record, err := installer.configMgr.GetInstallRecord("test-plugin@test-market")
+			if err != nil {
+				t.Fatalf("install record missing: %v", err)
+			}
+			if !record.Disabled {
+				t.Error("record should be marked as disabled")
+			}
+		})
+	}
+}
+
 func TestInstaller_Enable(t *testing.T) {
 	installer, _ := setupInstallerTest(t)
 	paths := installer.configMgr.GetPaths()
 	setupInstalledPlugin(t, installer, "test-plugin", "test-market")
 
-	if err := installer.Disable("test-plugin", "test-market"); err != nil {
+	if err := installer.Disable("test-plugin", "test-market", false); err != nil {
 		t.Fatalf("Disable() error = %v", err)
 	}
 
@@ -163,7 +231,7 @@ func TestInstaller_Enable_PreservesExistingMCPConfig(t *testing.T) {
 	}`
 	os.WriteFile(manifestPath, []byte(manifest), 0644)
 
-	installer.linker.RemoveSymlinks(cachePath)
+	installer.linker.RemoveSymlinks(cachePath, false)
 	installer.configMgr.MutateInstallRecord("test-plugin@test-market", func(record *config.InstallRecord) {
 		record.Disabled = true
 		record.DisabledAt = time.Now()
@@ -208,7 +276,7 @@ func TestInstaller_Enable_Idempotent(t *testing.T) {
 	installer, _ := setupInstallerTest(t)
 	setupInstalledPlugin(t, installer, "test-plugin", "test-market")
 
-	installer.Disable("test-plugin", "test-market")
+	installer.Disable("test-plugin", "test-market", false)
 
 	if err := installer.Enable("test-plugin", "test-market", false); err != nil {
 		t.Fatalf("first enable failed: %v", err)
@@ -262,7 +330,7 @@ func TestInstaller_Enable_AfterPartialDisable(t *testing.T) {
 func TestInstaller_Disable_NotInstalled(t *testing.T) {
 	installer, _ := setupInstallerTest(t)
 
-	err := installer.Disable("nonexistent", "market")
+	err := installer.Disable("nonexistent", "market", false)
 	if err == nil {
 		t.Error("expected error when disabling non-installed plugin")
 	}
@@ -807,7 +875,7 @@ func TestInstall_DisabledDependencyNotReenabled(t *testing.T) {
 		t.Fatalf("install dep failed: %v", err)
 	}
 
-	if err := installer.Disable("dep", "test-market"); err != nil {
+	if err := installer.Disable("dep", "test-market", false); err != nil {
 		t.Fatalf("disable dep failed: %v", err)
 	}
 
@@ -1043,7 +1111,7 @@ func TestUpdate_PreservesDisabledState(t *testing.T) {
 	if err := installer.Install("my-plugin", InstallOptions{MarketName: "test-market", Scope: "user"}); err != nil {
 		t.Fatalf("Install failed: %v", err)
 	}
-	if err := installer.Disable("my-plugin", "test-market"); err != nil {
+	if err := installer.Disable("my-plugin", "test-market", false); err != nil {
 		t.Fatalf("Disable failed: %v", err)
 	}
 

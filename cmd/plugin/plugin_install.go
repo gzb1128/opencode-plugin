@@ -115,6 +115,7 @@ var removeCmd = &cobra.Command{
 	Short: "Remove an installed plugin",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		force, _ := cmd.Flags().GetBool("force")
 		configMgr, err := config.NewManager()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to initialize config: %v\n", err)
@@ -129,7 +130,7 @@ var removeCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if err := installer.Remove(pluginName, marketName); err != nil {
+		if err := installer.Remove(pluginName, marketName, force); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}

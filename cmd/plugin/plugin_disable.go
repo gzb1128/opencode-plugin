@@ -23,6 +23,7 @@ Examples:
   opencode-plugin plugin disable superpowers@official`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		force, _ := cmd.Flags().GetBool("force")
 		configMgr, err := config.NewManager()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to initialize config: %v\n", err)
@@ -37,7 +38,7 @@ Examples:
 			os.Exit(1)
 		}
 
-		if err := installer.Disable(pluginName, marketName); err != nil {
+		if err := installer.Disable(pluginName, marketName, force); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
