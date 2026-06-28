@@ -67,7 +67,7 @@ opencode-plugin plugin install my-plugin -f
 
 ### orphan symlink：disable/remove/update 的强制清理
 
-`disable` / `remove` / `update` 删除 symlink 时（`opencode.RemoveSymlinks`），
+`disable` / `remove` / `update` 删除 symlink 时（`Linker.RemoveSymlinks`，`internal/opencode/linker.go`），
 正常只删 **target 落在 plugin cache 目录之内** 的链接。如果某个 symlink
 **名字**匹配 plugin 但 **target 指向 cache 之外**（典型场景：开发态直接
 `ln -s` 源码仓库留下的孤儿），它属于 orphan：
