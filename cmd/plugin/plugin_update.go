@@ -15,7 +15,8 @@ var updateCmd = &cobra.Command{
 	Short: "Update installed plugins",
 	Long: `Update one or all installed plugins to their latest versions.
 
-If no plugin is specified, updates all installed plugins.
+If no plugin is specified, updates all enabled installed plugins;
+disabled installations are skipped.
 
 Examples:
   opencode-plugin plugin update
@@ -44,8 +45,27 @@ Examples:
 		}
 
 		if len(args) == 0 {
-			fmt.Printf("Updating all installed plugins (%d)...\n\n", len(installed))
+			enabledCount := 0
+			disabledCount := 0
+			for _, records := range installed {
+				if len(records) == 0 {
+					continue
+				}
+				if records[0].Disabled {
+					disabledCount++
+				} else {
+					enabledCount++
+				}
+			}
+
+			if enabledCount == 0 {
+				fmt.Printf("No enabled plugins to update (%d disabled skipped).\n", disabledCount)
+				return
+			}
+
+			fmt.Printf("Updating %d enabled installed plugins...\n\n", enabledCount)
 			updated := 0
+			skipped := 0
 			failed := 0
 
 			for key, records := range installed {
@@ -60,6 +80,12 @@ Examples:
 				pluginName := key[:idx]
 				marketName := key[idx+1:]
 
+				if records[0].Disabled {
+					fmt.Printf("Skipping %s (disabled)\n\n", key)
+					skipped++
+					continue
+				}
+
 				fmt.Printf("Updating %s...\n", key)
 				if err := updatePlugin(installer, configMgr, pluginName, marketName, force, &records[0]); err != nil {
 					fmt.Fprintf(os.Stderr, "  Error: %v\n\n", err)
@@ -69,7 +95,7 @@ Examples:
 				}
 			}
 
-			fmt.Printf("\n✓ Updated %d plugins, %d failed\n", updated, failed)
+			fmt.Printf("\n✓ Updated %d plugins, %d skipped, %d failed\n", updated, skipped, failed)
 			// 部分失败时必须非零退出，否则 CI / cron / 脚本无法检测到 update 实际上没成功。
 			if failed > 0 {
 				os.Exit(1)
@@ -94,7 +120,7 @@ Examples:
 func updatePlugin(installer *plugin.Installer, configMgr *config.Manager, pluginName, marketName string, force bool, preloadedRecord ...*config.InstallRecord) error {
 	key := fmt.Sprintf("%s@%s", pluginName, marketName)
 
-	// 读取已有 record，决定保留 disabled 状态
+	// 显式指定 plugin 时保留 disabled 状态；批量 update 在外层跳过 disabled installation。
 	var existingRecord *config.InstallRecord
 	if len(preloadedRecord) > 0 && preloadedRecord[0] != nil {
 		existingRecord = preloadedRecord[0]
