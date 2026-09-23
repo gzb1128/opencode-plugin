@@ -5,8 +5,7 @@
 ```
 opencode-plugin is a standalone CLI tool for managing OpenCode's plugin ecosystem.
 It replicates Claude Code's plugin marketplace capabilities, allowing users to
-add marketplaces, install plugins, and integrate them with OpenCode via symlinks
-and MCP server configuration.
+add marketplaces, install plugins, and integrate them with OpenCode via symlinks.
 ```
 
 ## Module Dependency Graph
@@ -23,14 +22,10 @@ cmd/root.go
 │   ├── plugin_info.go    → internal/config, internal/marketplace, internal/plugin
 │   ├── plugin_search.go  → internal/config, internal/marketplace
 │   └── plugin_update.go  → internal/config, internal/plugin
-└── cmd/mcp/
-    └── mcp.go         → internal/config, internal/mcp
-
 internal/config/          (no internal deps)
 internal/marketplace/     (no internal deps)
-internal/plugin/          → internal/config, internal/marketplace, internal/opencode, internal/mcp
+internal/plugin/          → internal/config, internal/marketplace, internal/opencode
 internal/opencode/        (no internal deps)
-internal/mcp/             (no internal deps)
 ```
 
 ## Data Flow
@@ -62,12 +57,7 @@ User runs: opencode-plugin plugin install <name>
     ├── 2e. opencode.Linker::CreateSymlinks()
     │       └── ~/.agents/skills/* → cache/*/skills/*
    │
-   ├── 2f. mcp.Manager::InstallMCPConfig()
-   │       ├── Read .mcp.json + plugin.json mcpServers
-   │       ├── Substitute ${CLAUDE_PLUGIN_ROOT}, ${PLUGIN_NAME}, ${PLUGIN_VERSION}
-   │       └── Merge into ~/.config/opencode/.mcp.json with "plugin.server" prefix
-   │
-   └── 2g. config.Manager::AddInstallRecord()
+   └── 2f. config.Manager::AddInstallRecord()
            → Append to ~/.opencode-plugin-cli/installed_plugins.json
 ```
 
@@ -79,9 +69,8 @@ User runs: opencode-plugin plugin remove <name>
 1. Resolve plugin name (handle ambiguous installs)
 2. config.Manager::GetInstallRecord(key)
 3. opencode.Linker::RemoveSymlinks(installPath)
-4. mcp.Manager::UninstallMCPConfig(pluginName)
-5. os.RemoveAll(cachePath)
-6. config.Manager::RemoveInstallRecord(key)
+4. os.RemoveAll(cachePath)
+5. config.Manager::RemoveInstallRecord(key)
 ```
 
 ## Directory Layout (Runtime)
@@ -103,10 +92,7 @@ User runs: opencode-plugin plugin remove <name>
         └── <plugin-name>/
             └── <version>/
                 ├── .claude-plugin/
-                ├── .mcp.json
                 ├── skills/
-                ├── server.ts       (MCP server source)
-                ├── package.json    (MCP dependencies)
                 └── ...
 
 ~/.agents/
@@ -122,19 +108,16 @@ User runs: opencode-plugin plugin remove <name>
 | Config | `internal/config/` | Path resolution, JSON persistence, environment abstraction |
 | Marketplace | `internal/marketplace/` | Source parsing, git operations, plugin discovery |
 | Plugin | `internal/plugin/` | Install/remove orchestration, version resolution, file caching |
-| MCP | `internal/mcp/` | MCP server config read/write, variable substitution |
 | OpenCode | `internal/opencode/` | Symlink creation/removal for OpenCode integration |
 
 ## Key Design Decisions
 
 1. **Symlinks over copies**: Plugin skills are symlinked into the agents dir so they are discovered without any code changes.
 
-2. **Plugin name prefix for MCP**: MCP servers are registered as `pluginName.serverName` to avoid conflicts between plugins.
+2. **Copy-all caching**: All plugin files are copied to cache, not just skills.
 
-3. **Copy-all caching**: All plugin files (including MCP source code and dependencies) are copied to cache, not just skills.
+3. **Environment abstraction**: Config module supports production and test environments via `Environment` struct, ensuring tests don't affect real config.
 
-4. **Environment abstraction**: Config module supports production and test environments via `Environment` struct, ensuring tests don't affect real config.
+4. **Marketplace name tracking**: Every install records the marketplace name (`plugin@market`) to support remove and update operations.
 
-5. **Marketplace name tracking**: Every install records the marketplace name (`plugin@market`) to support remove and update operations.
-
-6. **Idempotent operations**: `git pull` handles already-up-to-date repos, install skips existing cache, symlinks skip conflicts.
+5. **Idempotent operations**: `git pull` handles already-up-to-date repos, install skips existing cache, symlinks skip conflicts.

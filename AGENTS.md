@@ -9,8 +9,8 @@ opencode-plugin 是一个 **Claude Code 插件生态兼容层**。它的核心�
 ### 设计原则
 
 1. **兼容而非替代**：我们不重新实现 Claude Code 已有的能力（如 `plugin init`、`plugin validate`），让 AI agent 自己完成这些操作更原生
-2. **只做搬运层**：CLI 负责 marketplace 发现、plugin 下载/缓存、symlink 管理、MCP 配置注入；不负责 plugin 内容的创建或校验
-3. **对齐 Claude Code 数据格式**：`marketplace.json`、`plugin.json`、`.mcp.json` 等文件格式完全兼容 Claude Code 规范
+2. **只做搬运层**：CLI 负责 marketplace 发现、plugin 下载/缓存、symlink 管理；不负责 plugin 内容的创建或校验
+3. **对齐 Claude Code 数据格式**：`marketplace.json`、`plugin.json` 等文件格式兼容 Claude Code 规范
 4. **渐进式实现**：Hooks、LSP、Monitors、Themes 等组件先解析存储，等 opencode runtime 支持后激活
 
 ## 导航
@@ -23,8 +23,6 @@ opencode-plugin 是一个 **Claude Code 插件生态兼容层**。它的核心�
 | CLI 命令设计 | `docs/design/CLI.md` |
 | 配置管理 | `docs/design/CONFIGURATION.md` |
 | OpenCode 集成 | `docs/design/OPENCODE.md` |
-| MCP 实现（用户指南） | `docs/MCP.md` |
-| MCP 模块设计 | `docs/design/MCP.md` |
 | 使用指南 | `docs/USAGE.md` |
 
 ## 关键隐式知识
@@ -96,7 +94,7 @@ opencode-plugin plugin update  opencode-customize@skill-forge -f
 1. **Stage 1（materialize）**：把旧 cache 目录 rename 成 `.update-backup`，然后
    重新 clone / copy 出新版本。**网络步骤只在这一阶段发生。**
    - 如果失败：rename 回 `.update-backup` → 原路径，旧 plugin 完整保留，用户无感知。
-2. **Stage 2（swap）**：删旧 symlinks/MCP、建新 symlinks/MCP、覆盖 install record。
+2. **Stage 2（swap）**：删旧 symlinks、建新 symlinks、覆盖 install record。
 3. **Stage 3（cleanup）**：删 `.update-backup`、`CleanupOldVersions` 清理同 plugin
    其它历史版本。
 

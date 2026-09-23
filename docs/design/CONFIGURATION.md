@@ -13,7 +13,7 @@ The `Environment` struct defines the runtime environment:
 ```go
 type Environment struct {
     BaseDir        string  // Base directory for CLI data
-    OpenCodeConfig string  // OpenCode configuration directory
+    AgentsDir      string  // Agents integration directory
 }
 ```
 
@@ -28,7 +28,7 @@ Production environment uses the user's home directory:
 ├── markets/                      # Cloned marketplaces
 └── cache/                        # Plugin cache
 
-~/.config/opencode/               # OpenCode config
+~/.agents/                        # OpenCode integration
 ├── skills/                       # Symlinks to skills
 ├── commands/                     # Symlinks to commands
 └── agents/                       # Symlinks to agents
@@ -194,7 +194,6 @@ type Paths struct {
     CacheDir       string  // ~/.opencode-plugin-cli/cache
     KnownMarkets   string  // ~/.opencode-plugin-cli/known_marketplaces.json
     InstalledFile  string  // ~/.opencode-plugin-cli/installed_plugins.json
-    OpenCodeConfig string  // ~/.config/opencode
 }
 ```
 

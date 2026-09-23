@@ -177,8 +177,6 @@ rm -rf ~/.opencode-plugin-cli
 # 检查并手动删除对应插件的技能符号链接
 find ~/.agents/skills -type l -ls
 
-# 如果插件安装过 MCP,还需要清理 ~/.config/opencode/opencode.json 中对应的 mcp 条目
-
 # 重新添加 marketplace 和安装插件
 opencode-plugin market add anthropics/claude-plugins-official
 opencode-plugin plugin install code-simplifier

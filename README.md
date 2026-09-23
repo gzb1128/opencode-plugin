@@ -10,9 +10,8 @@
 `opencode-plugin` is a CLI for installing marketplace plugins into an
 OpenCode-style agent setup.
 
-It keeps plugin files in a local cache, links plugin skills into
-`~/.agents/skills`, and registers plugin MCP servers in
-`~/.config/opencode/opencode.json`.
+It keeps plugin files in a local cache and links plugin skills into
+`~/.agents/skills`.
 
 > **Note:** This project is not built by, endorsed by, or affiliated with the
 > OpenCode team. It is an independent, community-built tool that works with the
@@ -25,8 +24,8 @@ It keeps plugin files in a local cache, links plugin skills into
 - Searches, installs, updates, and removes plugins from added marketplaces.
 - Caches installed plugin files under `~/.opencode-plugin-cli/cache`.
 - Links files from a plugin's `skills/` directory into `~/.agents/skills`.
-- Installs MCP server config from `.mcp.json` or `plugin.json` `mcpServers`.
-- Prefixes MCP server names with the plugin name.
+- Preserves the plugin cache so other plugin assets remain locally available.
+- Does not install or modify OpenCode MCP configuration.
 
 ## Install
 
@@ -157,38 +156,6 @@ opencode-plugin plugin update my-plugin
 opencode-plugin plugin remove my-plugin
 ```
 
-## MCP Servers
-
-Plugins can define MCP servers in either `.mcp.json` or the `mcpServers` field
-in `.claude-plugin/plugin.json`. During install, `opencode-plugin` merges those
-servers into the `mcp` section of `~/.config/opencode/opencode.json`.
-
-Supported server types:
-
-- `stdio`
-- `http`
-- `sse`
-- `websocket`
-
-Supported substitutions:
-
-- `${CLAUDE_PLUGIN_ROOT}`
-- `${PLUGIN_NAME}`
-- `${PLUGIN_VERSION}`
-
-Substitution is applied to `command`, `args`, `url`, and `env` values.
-
-Useful commands:
-
-```bash
-opencode-plugin mcp list
-opencode-plugin mcp show plugin-name.server-name
-```
-
-MCP entries installed by a plugin are removed when that plugin is removed.
-
-See [docs/MCP.md](docs/MCP.md) for MCP configuration examples.
-
 ## Runtime Files
 
 ```text
@@ -201,7 +168,6 @@ See [docs/MCP.md](docs/MCP.md) for MCP configuration examples.
         └── <plugin-name>/
             └── <version>/
                 ├── .claude-plugin/
-                ├── .mcp.json
                 ├── skills/
                 └── ...
 
@@ -209,13 +175,9 @@ See [docs/MCP.md](docs/MCP.md) for MCP configuration examples.
 └── skills/
     └── <skill-name> -> ~/.opencode-plugin-cli/cache/.../skills/<skill-name>
 
-~/.config/opencode/
-└── opencode.json
 ```
 
-Only `skills/` are linked today. Other plugin files stay in the plugin cache so
-MCP servers and supporting files can still resolve paths relative to the plugin
-root.
+Only `skills/` are linked today. Other plugin files stay in the plugin cache.
 
 ## Version Resolution
 
@@ -233,7 +195,6 @@ defined, `--version` is used when provided; otherwise the version is `latest`.
 ## Development
 
 - Usage guide: [docs/USAGE.md](docs/USAGE.md)
-- MCP details: [docs/MCP.md](docs/MCP.md)
 - Architecture notes: [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md)
 - Development notes: [docs/develop/develop.md](docs/develop/develop.md)
 

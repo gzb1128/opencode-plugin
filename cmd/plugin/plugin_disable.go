@@ -14,8 +14,8 @@ var disableCmd = &cobra.Command{
 	Short: "Disable an installed plugin",
 	Long: `Disable an installed plugin without removing it.
 
-The plugin's symlinks and MCP servers will be deactivated, but the
-installation record and cached files are preserved. Use 'plugin enable'
+The plugin's symlinks will be deactivated, but the installation record and
+cached files are preserved. Use 'plugin enable'
 to reactivate the plugin.
 
 Examples:

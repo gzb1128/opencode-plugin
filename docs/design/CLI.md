@@ -2,8 +2,8 @@
 
 ## Overview
 
-The CLI layer uses [Cobra](https://github.com/spf13/cobra) and is organized into three
-command groups: `market`, `plugin`, and `mcp`.
+The CLI layer uses [Cobra](https://github.com/spf13/cobra) and is organized into two
+command groups: `market` and `plugin`.
 
 ## Command Tree
 
@@ -21,9 +21,6 @@ opencode-plugin
 │   ├── search [keyword]
 │   ├── update [name]
 │   └── remove <name>[@<market>]
-└── mcp
-    ├── list
-    └── show <server-name>
 ```
 
 ## File Structure
@@ -41,8 +38,6 @@ cmd/
 │   ├── plugin_info.go      # plugin info
 │   ├── plugin_search.go    # plugin search
 │   └── plugin_update.go    # plugin update
-└── mcp/
-    └── mcp.go              # mcp Cmd (parent), mcp list, mcp show
 ```
 
 ## cmd/root.go
@@ -53,7 +48,7 @@ var version string = "0.1.0"
 func Execute()          // Entry point, runs rootCmd
 ```
 
-Registers three subcommands: `market.Cmd`, `plugin.Cmd`, `mcp.Cmd`.
+Registers two subcommands: `market.Cmd` and `plugin.Cmd`.
 
 ## cmd/market/
 
@@ -100,7 +95,7 @@ idx := strings.Index(pluginSpec, "@")
 
 Flow: `config.NewManager()` → `plugin.NewInstaller()` → `installer.Install()`
 
-Output includes: version, marketplace, cache path, skill/command/agent counts, MCP server count.
+Output includes: version, marketplace, cache path, and skill/command/agent counts.
 
 ### plugin remove <name>[@<market>]
 
@@ -133,15 +128,3 @@ Shows detailed plugin information:
 - No argument: update all installed plugins
 - With argument: update specific plugin
 - Implementation: remove old version, install latest
-
-## cmd/mcp/
-
-### mcp list
-
-Reads `~/.config/opencode/.mcp.json`, displays table with:
-- Name, Type (stdio/http/sse/websocket), Command or URL
-
-### mcp show <server-name>
-
-Shows detailed MCP server info:
-- Type, Command, URL, Arguments, Environment Variables

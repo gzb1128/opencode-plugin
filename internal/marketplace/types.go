@@ -182,7 +182,6 @@ type Plugin struct {
 	Skills          interface{}     `json:"skills,omitempty"`
 	Commands        interface{}     `json:"commands,omitempty"`
 	Agents          interface{}     `json:"agents,omitempty"`
-	MCPServersRaw   json.RawMessage `json:"mcpServers,omitempty"`
 	HooksRaw        json.RawMessage `json:"hooks,omitempty"`
 	OutputStylesRaw json.RawMessage `json:"outputStyles,omitempty"`
 	ChannelsRaw     json.RawMessage `json:"channels,omitempty"`
