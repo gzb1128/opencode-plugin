@@ -97,8 +97,8 @@ func TestMaterializePlugin_LocalWithFallbackManifest(t *testing.T) {
 	if manifest["version"] != "2.0.0" {
 		t.Errorf("manifest version = %v, want 2.0.0", manifest["version"])
 	}
-	if _, ok := manifest["mcpServers"]; !ok {
-		t.Error("manifest should contain mcpServers")
+	if _, ok := manifest["mcpServers"]; ok {
+		t.Error("manifest should NOT contain unsupported mcpServers")
 	}
 	if _, ok := manifest["skills"]; !ok {
 		t.Error("manifest should contain skills")

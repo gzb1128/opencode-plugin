@@ -246,7 +246,7 @@ func TestInstall_SymlinkFailureDoesNotCommitRecord(t *testing.T) {
 		t.Fatal("expected Install to fail when symlink creation fails, got nil")
 	}
 
-	// 关键：不能写安装记录——否则用户以为装好了但其实 symlink / MCP 都没建。
+	// 关键：不能写安装记录——否则用户以为装好了但其实 symlink 都没建。
 	if _, err := installer.configMgr.GetInstallRecord("my-plugin@test-market"); err == nil {
 		t.Errorf("install record must NOT be written when Install fails (false success)")
 	}

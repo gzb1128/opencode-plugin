@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/opencode/plugin-cli/cmd/market"
-	"github.com/opencode/plugin-cli/cmd/mcp"
 	"github.com/opencode/plugin-cli/cmd/plugin"
 	"github.com/spf13/cobra"
 )
@@ -23,7 +22,6 @@ It allows you to:
 - Add and manage plugin marketplaces
 - Install, update, and remove plugins
 - Search for available plugins
-- Manage MCP (Model Context Protocol) servers
 - Diagnose plugin issues`,
 	Version: version,
 }
@@ -38,5 +36,4 @@ func Execute() {
 func init() {
 	rootCmd.AddCommand(market.Cmd)
 	rootCmd.AddCommand(plugin.Cmd)
-	rootCmd.AddCommand(mcp.Cmd)
 }

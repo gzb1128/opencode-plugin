@@ -3,7 +3,7 @@
 ## Overview
 
 The plugin module orchestrates plugin installation, removal, listing, and version
-resolution. It coordinates between config, marketplace, opencode, and mcp modules.
+resolution. It coordinates between config, marketplace, and opencode modules.
 
 ## File Structure
 
@@ -21,7 +21,6 @@ type Installer struct {
     resolver   *VersionResolver
     linker     *opencode.Linker
     marketMgr  *marketplace.Manager
-    mcpManager *mcp.Manager
 }
 
 type InstallOptions struct {
@@ -50,18 +49,14 @@ Install(pluginName, opts) error
 ├── 5. Copy plugin files to cache
 │       copyPluginToCache(src, dst)
 │       → copies ALL files (skip .git)
-│       → includes: .claude-plugin/, .mcp.json, skills/,
-│         server.ts, package.json, etc.
+│       → includes: .claude-plugin/, skills/, commands/, agents/,
+│         package.json, README.md, etc.
 │
 ├── 6. CreateSymlinks(cachePath)
 │       → skills/* → ~/.agents/skills/
 │       → returns ComponentCounts{Skills}
 │
-├── 7. installMCP(cachePath, pluginName)
-│       → GetMCPServers() → count
-│       → InstallMCPConfig() → write to ~/.config/opencode/.mcp.json
-│
-└── 8. AddInstallRecord(key, record)
+└── 7. AddInstallRecord(key, record)
         → key = "pluginName@marketName"
         → record = {Scope, InstallPath, Version, InstalledAt, ...}
 ```
@@ -73,9 +68,8 @@ Remove(pluginName, marketName) error
 │
 ├── 1. GetInstallRecord(key) → get cache path
 ├── 2. RemoveSymlinks(installPath) → unlink from ~/.agents/
-├── 3. UninstallMCPConfig(pluginName) → remove from .mcp.json
-├── 4. os.RemoveAll(cachePath)
-└── 5. RemoveInstallRecord(key)
+├── 3. os.RemoveAll(cachePath)
+└── 4. RemoveInstallRecord(key)
 ```
 
 ### List
@@ -86,19 +80,17 @@ a slice of install records.
 ## File Copying
 
 `copyPluginToCache` copies the entire plugin directory recursively, skipping
-only `.git/`. This is essential for MCP server plugins that include source
-code, dependencies, and configuration files.
+only `.git/`. This preserves source code, dependencies, and configuration files.
 
 ```
 Source plugin directory:
 ├── .claude-plugin/
 │   └── plugin.json
-├── .mcp.json
 ├── skills/
 ├── commands/
 ├── agents/
-├── server.ts            ← MCP server source
-├── package.json         ← MCP dependencies
+├── server.ts
+├── package.json
 ├── bun.lock             ← Lock file
 └── README.md
 

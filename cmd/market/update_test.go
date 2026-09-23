@@ -29,16 +29,15 @@ func TestCleanupDeletedPlugins(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	paths := &config.Paths{
-		BaseDir:        tmpDir,
-		MarketsDir:     filepath.Join(tmpDir, "markets"),
-		CacheDir:       filepath.Join(tmpDir, "cache"),
-		KnownMarkets:   filepath.Join(tmpDir, "known_marketplaces.json"),
-		InstalledFile:  filepath.Join(tmpDir, "installed_plugins.json"),
-		OpenCodeConfig: filepath.Join(tmpDir, "opencode"),
-		AgentsDir:      filepath.Join(tmpDir, "agents"),
+		BaseDir:       tmpDir,
+		MarketsDir:    filepath.Join(tmpDir, "markets"),
+		CacheDir:      filepath.Join(tmpDir, "cache"),
+		KnownMarkets:  filepath.Join(tmpDir, "known_marketplaces.json"),
+		InstalledFile: filepath.Join(tmpDir, "installed_plugins.json"),
+		AgentsDir:     filepath.Join(tmpDir, "agents"),
 	}
 
-	for _, dir := range []string{paths.MarketsDir, paths.CacheDir, paths.OpenCodeConfig, paths.AgentsDir} {
+	for _, dir := range []string{paths.MarketsDir, paths.CacheDir, paths.AgentsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -118,16 +117,15 @@ func TestUpdateMarketDeletedPluginCleanup(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	paths := &config.Paths{
-		BaseDir:        tmpDir,
-		MarketsDir:     filepath.Join(tmpDir, "markets"),
-		CacheDir:       filepath.Join(tmpDir, "cache"),
-		KnownMarkets:   filepath.Join(tmpDir, "known_marketplaces.json"),
-		InstalledFile:  filepath.Join(tmpDir, "installed_plugins.json"),
-		OpenCodeConfig: filepath.Join(tmpDir, "opencode"),
-		AgentsDir:      filepath.Join(tmpDir, "agents"),
+		BaseDir:       tmpDir,
+		MarketsDir:    filepath.Join(tmpDir, "markets"),
+		CacheDir:      filepath.Join(tmpDir, "cache"),
+		KnownMarkets:  filepath.Join(tmpDir, "known_marketplaces.json"),
+		InstalledFile: filepath.Join(tmpDir, "installed_plugins.json"),
+		AgentsDir:     filepath.Join(tmpDir, "agents"),
 	}
 
-	for _, dir := range []string{paths.MarketsDir, paths.CacheDir, paths.OpenCodeConfig, paths.AgentsDir} {
+	for _, dir := range []string{paths.MarketsDir, paths.CacheDir, paths.AgentsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -205,16 +203,15 @@ func TestCleanupDeletedPlugins_NoDeleted(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	paths := &config.Paths{
-		BaseDir:        tmpDir,
-		MarketsDir:     filepath.Join(tmpDir, "markets"),
-		CacheDir:       filepath.Join(tmpDir, "cache"),
-		KnownMarkets:   filepath.Join(tmpDir, "known_marketplaces.json"),
-		InstalledFile:  filepath.Join(tmpDir, "installed_plugins.json"),
-		OpenCodeConfig: filepath.Join(tmpDir, "opencode"),
-		AgentsDir:      filepath.Join(tmpDir, "agents"),
+		BaseDir:       tmpDir,
+		MarketsDir:    filepath.Join(tmpDir, "markets"),
+		CacheDir:      filepath.Join(tmpDir, "cache"),
+		KnownMarkets:  filepath.Join(tmpDir, "known_marketplaces.json"),
+		InstalledFile: filepath.Join(tmpDir, "installed_plugins.json"),
+		AgentsDir:     filepath.Join(tmpDir, "agents"),
 	}
 
-	for _, dir := range []string{paths.MarketsDir, paths.CacheDir, paths.OpenCodeConfig, paths.AgentsDir} {
+	for _, dir := range []string{paths.MarketsDir, paths.CacheDir, paths.AgentsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -245,16 +242,15 @@ func TestCleanupDeletedPlugins_NotInstalled(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	paths := &config.Paths{
-		BaseDir:        tmpDir,
-		MarketsDir:     filepath.Join(tmpDir, "markets"),
-		CacheDir:       filepath.Join(tmpDir, "cache"),
-		KnownMarkets:   filepath.Join(tmpDir, "known_marketplaces.json"),
-		InstalledFile:  filepath.Join(tmpDir, "installed_plugins.json"),
-		OpenCodeConfig: filepath.Join(tmpDir, "opencode"),
-		AgentsDir:      filepath.Join(tmpDir, "agents"),
+		BaseDir:       tmpDir,
+		MarketsDir:    filepath.Join(tmpDir, "markets"),
+		CacheDir:      filepath.Join(tmpDir, "cache"),
+		KnownMarkets:  filepath.Join(tmpDir, "known_marketplaces.json"),
+		InstalledFile: filepath.Join(tmpDir, "installed_plugins.json"),
+		AgentsDir:     filepath.Join(tmpDir, "agents"),
 	}
 
-	for _, dir := range []string{paths.MarketsDir, paths.CacheDir, paths.OpenCodeConfig, paths.AgentsDir} {
+	for _, dir := range []string{paths.MarketsDir, paths.CacheDir, paths.AgentsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}

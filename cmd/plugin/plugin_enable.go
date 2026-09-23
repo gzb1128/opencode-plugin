@@ -14,7 +14,7 @@ var enableCmd = &cobra.Command{
 	Short: "Enable a disabled plugin",
 	Long: `Re-enable a previously disabled plugin.
 
-Restores the plugin's symlinks and MCP servers from the cached files.
+Restores the plugin's symlinks from the cached files.
 
 Examples:
   opencode-plugin plugin enable superpowers

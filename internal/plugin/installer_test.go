@@ -11,7 +11,6 @@ import (
 
 	"github.com/opencode/plugin-cli/internal/config"
 	"github.com/opencode/plugin-cli/internal/marketplace"
-	"github.com/opencode/plugin-cli/internal/mcp"
 	"github.com/opencode/plugin-cli/internal/opencode"
 )
 
@@ -28,11 +27,10 @@ func setupInstallerTest(t *testing.T) (*Installer, string) {
 	mgr := config.NewManagerWithPath(paths)
 
 	installer := &Installer{
-		resolver:   NewVersionResolver(),
-		configMgr:  mgr,
-		linker:     opencode.NewLinker(paths.AgentsDir),
-		marketMgr:  marketplace.NewManager(paths.MarketsDir),
-		mcpManager: mcp.NewManager(paths.OpenCodeConfig, paths.PluginDataDir),
+		resolver:  NewVersionResolver(),
+		configMgr: mgr,
+		linker:    opencode.NewLinker(paths.AgentsDir),
+		marketMgr: marketplace.NewManager(paths.MarketsDir),
 	}
 
 	return installer, paths.BaseDir
@@ -213,9 +211,9 @@ func TestInstaller_Enable(t *testing.T) {
 	}
 }
 
-func TestInstaller_Enable_PreservesExistingMCPConfig(t *testing.T) {
+func TestInstaller_Enable_DoesNotTouchLegacyMCPConfig(t *testing.T) {
 	installer, _ := setupInstallerTest(t)
-	paths := installer.configMgr.GetPaths()
+	baseDir := installer.configMgr.GetPaths().BaseDir
 	cachePath := setupInstalledPlugin(t, installer, "test-plugin", "test-market")
 
 	manifestPath := filepath.Join(cachePath, ".claude-plugin", "plugin.json")
@@ -247,28 +245,20 @@ func TestInstaller_Enable_PreservesExistingMCPConfig(t *testing.T) {
 			}
 		}
 	}`
-	os.MkdirAll(paths.OpenCodeConfig, 0755)
-	os.WriteFile(filepath.Join(paths.OpenCodeConfig, "opencode.json"), []byte(existingContent), 0644)
+	configPath := filepath.Join(filepath.Dir(baseDir), ".config", "opencode", "opencode.json")
+	os.MkdirAll(filepath.Dir(configPath), 0755)
+	os.WriteFile(configPath, []byte(existingContent), 0644)
 
 	if err := installer.Enable("test-plugin", "test-market", false); err != nil {
 		t.Fatalf("Enable() error = %v", err)
 	}
 
-	data, _ := os.ReadFile(filepath.Join(paths.OpenCodeConfig, "opencode.json"))
-	var config map[string]json.RawMessage
-	json.Unmarshal(data, &config)
-	var mcpConfig map[string]mcp.OpenCodeMCPServer
-	json.Unmarshal(config["mcp"], &mcpConfig)
-
-	server := mcpConfig["test-plugin.server"]
-	if !server.Enabled {
-		t.Fatal("expected MCP server to be enabled")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read legacy user MCP config: %v", err)
 	}
-	if len(server.Command) != 2 || server.Command[1] != "custom.js" {
-		t.Fatalf("expected user-modified command to be preserved, got %v", server.Command)
-	}
-	if server.Environment["USER_EDIT"] != "yes" {
-		t.Fatal("expected user-modified environment to be preserved")
+	if string(data) != existingContent {
+		t.Fatalf("Enable modified legacy user MCP config:\n got: %s\nwant: %s", data, existingContent)
 	}
 }
 
@@ -765,7 +755,7 @@ func TestInstall_DisplayNameDoesNotAffectPluginID(t *testing.T) {
 	installer.configMgr.RemoveInstallRecord("tool@test-market")
 }
 
-func TestInstall_Disabled_SkipsSymlinksAndMCP(t *testing.T) {
+func TestInstall_Disabled_SkipsSymlinks(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	marketPath := filepath.Join(tmpDir, "market")

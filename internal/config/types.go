@@ -25,14 +25,12 @@ type InstallRecord struct {
 }
 
 type Paths struct {
-	BaseDir        string
-	MarketsDir     string
-	CacheDir       string
-	KnownMarkets   string
-	InstalledFile  string
-	OpenCodeConfig string
-	AgentsDir      string
-	PluginDataDir  string
+	BaseDir       string
+	MarketsDir    string
+	CacheDir      string
+	KnownMarkets  string
+	InstalledFile string
+	AgentsDir     string
 }
 
 // KnownMarkets stores marketplace information
@@ -54,13 +52,11 @@ func DefaultPaths() (*Paths, error) {
 	baseDir := filepath.Join(homeDir, ".opencode-plugin-cli")
 
 	return &Paths{
-		BaseDir:        baseDir,
-		MarketsDir:     filepath.Join(baseDir, "markets"),
-		CacheDir:       filepath.Join(baseDir, "cache"),
-		KnownMarkets:   filepath.Join(baseDir, "known_marketplaces.json"),
-		InstalledFile:  filepath.Join(baseDir, "installed_plugins.json"),
-		OpenCodeConfig: filepath.Join(homeDir, ".config", "opencode"),
-		AgentsDir:      filepath.Join(homeDir, ".agents"),
-		PluginDataDir:  filepath.Join(baseDir, "data"),
+		BaseDir:       baseDir,
+		MarketsDir:    filepath.Join(baseDir, "markets"),
+		CacheDir:      filepath.Join(baseDir, "cache"),
+		KnownMarkets:  filepath.Join(baseDir, "known_marketplaces.json"),
+		InstalledFile: filepath.Join(baseDir, "installed_plugins.json"),
+		AgentsDir:     filepath.Join(homeDir, ".agents"),
 	}, nil
 }

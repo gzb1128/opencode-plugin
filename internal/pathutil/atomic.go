@@ -8,7 +8,7 @@ import (
 
 // WriteFileAtomic 原子地写入文件：先写到同目录下的临时文件，
 // 再 rename 到目标路径。避免在 SIGKILL / 系统崩溃 / 磁盘满时
-// 留下被截断的 JSON 状态文件（installed_plugins.json、opencode.json 等）。
+// 留下被截断的 JSON 状态文件（如 installed_plugins.json）。
 //
 // rename 在同一文件系统下是原子的，所以临时文件必须和目标在同一目录。
 // perm 为最终文件的权限模式。
