@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,22 +32,49 @@ func TestRunOnce_SingleAttempt(t *testing.T) {
 }
 
 func TestCloneOrPullWithOptions_UsesGitHTTPTimeout(t *testing.T) {
+	var requestReleaseOnce, responseAllowOnce sync.Once
+	requestStarted := make(chan struct{})
+	requestRelease := make(chan struct{})
+	responseAllow := make(chan struct{})
+	responseSent := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(200 * time.Millisecond)
+		close(requestStarted)
+		<-requestRelease
+		<-responseAllow
+		close(responseSent)
 		_, _ = w.Write([]byte("not a git server"))
 	}))
 	t.Cleanup(server.Close)
+	t.Cleanup(func() {
+		requestReleaseOnce.Do(func() { close(requestRelease) })
+		responseAllowOnce.Do(func() { close(responseAllow) })
+	})
 
 	client := &GitClient{git: gitutil.NewClient(gitutil.Options{Timeout: 20 * time.Millisecond, Attempts: 1})}
 
-	started := time.Now()
-	err := client.CloneOrPullWithOptions(server.URL+"/market.git", filepath.Join(t.TempDir(), "clone"), CloneOptions{})
+	cloneErr := make(chan error, 1)
+	go func() {
+		cloneErr <- client.CloneOrPullWithOptions(server.URL+"/market.git", filepath.Join(t.TempDir(), "clone"), CloneOptions{})
+	}()
+
+	// Wait until go-git has connected before releasing the handler. Otherwise the
+	// elapsed-time assertion includes unrelated process scheduling in CI.
+	<-requestStarted
+	requestReleaseOnce.Do(func() { close(requestRelease) })
+
+	err := <-cloneErr
 	if err == nil {
 		t.Fatal("expected clone timeout")
 	}
-	if elapsed := time.Since(started); elapsed >= 150*time.Millisecond {
-		t.Fatalf("CloneOrPullWithOptions took %s, want timeout before server responds", elapsed)
+	if msg := strings.ToLower(err.Error()); !strings.Contains(msg, "timeout") && !strings.Contains(msg, "deadline") {
+		t.Fatalf("CloneOrPullWithOptions error = %v, want timeout/deadline", err)
 	}
+	select {
+	case <-responseSent:
+		t.Fatal("server responded before the configured HTTP timeout")
+	default:
+	}
+	responseAllowOnce.Do(func() { close(responseAllow) })
 }
 
 func newTestGitClient(timeout time.Duration) *GitClient {
